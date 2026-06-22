@@ -1,4 +1,6 @@
 using UnityEngine;
+using UnityEngine.Rendering;
+using System.Collections.Generic;
 
 public class BucketParticleSystemCustom : MonoBehaviour
 {
@@ -28,6 +30,8 @@ public class BucketParticleSystemCustom : MonoBehaviour
         public Vector3 acceleration;
         public float size;
         public Color color;
+        public float density;
+        public float pressure;
         public bool active;
         public bool stuckToCanvas;
     }
@@ -117,6 +121,32 @@ public class BucketParticleSystemCustom : MonoBehaviour
     [Tooltip("If ON, emission stops automatically when Current Water Amount reaches zero.")]
     [SerializeField] private bool stopWhenBucketEmpty = true;
 
+    [Header("Visible Liquid Inside Bucket")]
+    [Tooltip("If ON, a visible liquid surface inside the bucket follows Current Water Amount.")]
+    [SerializeField] private bool updateBucketLiquidVisual = true;
+
+    [Tooltip("Assign a thin cylinder/mesh placed inside the bucket. If empty and Auto Create is ON, the script creates one.")]
+    [SerializeField] private Transform bucketLiquidVisual;
+
+    [Tooltip("Creates a simple flattened cylinder inside the emitter if no liquid visual is assigned.")]
+    [SerializeField] private bool autoCreateLiquidVisualIfMissing = true;
+
+    [SerializeField] private Vector3 autoLiquidLocalPosition = new Vector3(0f, 0f, 0f);
+    [SerializeField] private Vector3 autoLiquidLocalScale = new Vector3(0.65f, 0.035f, 0.65f);
+
+    [Tooltip("How far the liquid surface moves downward locally when the bucket is empty.")]
+    [SerializeField] private float emptyLiquidLocalYOffset = -0.35f;
+
+    [Tooltip("Y scale multiplier when the bucket is empty. Keep very small but not zero.")]
+    [SerializeField, Range(0.001f, 1f)] private float emptyLiquidScaleYMultiplier = 0.03f;
+
+    [SerializeField] private bool hideLiquidVisualWhenEmpty = true;
+    [SerializeField] private bool liquidUsesPaintColor = true;
+    [SerializeField] private Color liquidColor = new Color(1.0f, 0.4117647f, 0.7058824f, 1.0f);
+
+    [Tooltip("0 = instant level update, 1 = very smooth/slow update.")]
+    [SerializeField, Range(0f, 0.98f)] private float liquidVisualSmoothing = 0.15f;
+
     [Header("Emission")]
     [SerializeField] private bool emissionEnabled = true;
     [SerializeField, Min(1)] private int maxParticles = 5000;
@@ -135,6 +165,37 @@ public class BucketParticleSystemCustom : MonoBehaviour
     [Header("Paint Impact Algorithm")]
     [Tooltip("0 = watery paint, 1 = thick paint")]
     [SerializeField, Range(0f, 1f)] private float paintViscosity = 0.45f;
+
+    [Header("SPH Fluid Simulation")]
+    [Tooltip("If ON, particles interact with nearby particles using a light SPH pressure/viscosity model.")]
+    [SerializeField] private bool useSPHSimulation = false;
+
+    [Tooltip("Overall strength of the SPH acceleration added to each particle.")]
+    [SerializeField, Range(0f, 2f)] private float sphInfluence = 0.65f;
+
+    [Tooltip("Neighbor distance. Bigger value = particles influence each other from farther away.")]
+    [SerializeField, Min(0.01f)] private float sphSmoothingRadius = 0.22f;
+
+    [Tooltip("Pseudo mass used only by the SPH solver.")]
+    [SerializeField, Min(0.0001f)] private float sphParticleMass = 1f;
+
+    [Tooltip("Target density. Lower values make the stream spread sooner; higher values keep it tighter.")]
+    [SerializeField, Min(0.0001f)] private float sphRestDensity = 120f;
+
+    [Tooltip("Pressure stiffness. Bigger value = stronger separation between crowded particles.")]
+    [SerializeField, Min(0f)] private float sphPressureStiffness = 0.045f;
+
+    [Tooltip("Makes nearby particles share velocity and look more like liquid.")]
+    [SerializeField, Min(0f)] private float sphViscosityStrength = 0.08f;
+
+    [Tooltip("Small cohesion force that keeps the stream from looking like dust.")]
+    [SerializeField, Min(0f)] private float sphSurfaceTensionStrength = 0.018f;
+
+    [Tooltip("Safety clamp for SPH acceleration.")]
+    [SerializeField, Min(0.01f)] private float sphMaxAcceleration = 35f;
+
+    [Tooltip("Performance safety: only this many active particles are included in SPH each physics step.")]
+    [SerializeField, Min(1)] private int maxSPHParticles = 600;
 
     [Header("Flow Rate Algorithm")]
     [Tooltip("If ON, the emission rate is calculated from tilt, remaining water, outlet size, and viscosity.")]
@@ -186,14 +247,74 @@ public class BucketParticleSystemCustom : MonoBehaviour
     [SerializeField] private bool castShadows = false;
     [SerializeField] private bool receiveShadows = false;
 
+    [Header("High Count Optimization")]
+    [Tooltip("Draws particles in GPU-instanced batches instead of one DrawMesh call per particle. Keep ON for high counts.")]
+    [SerializeField] private bool useInstancedRendering = true;
+
+    [Tooltip("Render only every Nth active particle. 1 = render all. Use 2, 4, or 8 when testing 500k+ particles.")]
+    [SerializeField, Min(1)] private int renderEveryNthParticle = 1;
+
+    [Tooltip("Hard cap for how many active particles are sent to the renderer each frame.")]
+    [SerializeField, Min(1)] private int maxRenderedParticles = 50000;
+
+    [Tooltip("Viewport culling costs CPU per particle. This turns it off automatically for very high active counts.")]
+    [SerializeField] private bool skipViewportCullingWhenManyParticles = true;
+
+    [SerializeField, Min(1)] private int viewportCullingDisableThreshold = 50000;
+
+    [Tooltip("Optional CPU safety mode. It updates only a budget of particles per FixedUpdate and uses a larger dt for those particles. OFF = more accurate, ON = smoother editor performance at 500k.")]
+    [SerializeField] private bool useSimulationBudget = true;
+
+    [SerializeField, Min(1)] private int maxParticlesSimulatedPerFixedStep = 20000;
+
+    [Header("Turbo / Anti-Freeze Mode")]
+    [Tooltip("Automatically switches to cheaper simulation/rendering when many particles are active. Keep ON for 500k tests.")]
+    [SerializeField] private bool autoTurboMode = true;
+
+    [Tooltip("Turbo mode starts when Active Particle Count reaches this number.")]
+    [SerializeField, Min(1)] private int turboParticleThreshold = 50000;
+
+    [Tooltip("SPH is very expensive on CPU. This disables SPH automatically in turbo mode.")]
+    [SerializeField] private bool disableSPHInTurboMode = true;
+
+    [Tooltip("Only this many particles are drawn in turbo mode. The system still keeps/simulates more particles, but renders a sampled subset.")]
+    [SerializeField, Min(1)] private int turboRenderedParticleTarget = 35000;
+
+    [Tooltip("Only every Nth particle checks canvas collision in turbo mode. This prevents hundreds of thousands of collision tests.")]
+    [SerializeField, Min(1)] private int turboCanvasCollisionStride = 20;
+
+    [Tooltip("Maximum new particles created in one FixedUpdate. This prevents one lag spike from creating a huge emission burst next frame.")]
+    [SerializeField, Min(1)] private int maxEmittedPerFixedStep = 1000;
+
+
+    private const int MaxInstancesPerBatch = 1023;
+
     private Particle[] particles;
     private int[] freeStack;
     private int freeTop;
+    private int[] activeIndices;
+    private int[] activeSlots;
+    private int activeCount;
+    private int simulationCursor;
+    private Matrix4x4[] instancedMatrices;
     private float emissionAccumulator;
     private float lastCalculatedFlowRate;
     private float lastTiltFactor;
     private float lastWaterLevelFactor;
     private float lastViscosityFlowFactor;
+
+    private bool liquidFullTransformCaptured;
+    private Vector3 liquidFullLocalPosition;
+    private Vector3 liquidFullLocalScale;
+    private Renderer cachedLiquidRenderer;
+    private Material liquidMaterialInstance;
+
+    private float[] sphDensities;
+    private float[] sphPressures;
+    private Vector3[] sphAccelerations;
+    private List<int> sphActiveIndices;
+    private Dictionary<Vector3Int, List<int>> sphGrid;
+
     private bool initialized;
     private bool waterWasInitialized;
 
@@ -218,6 +339,11 @@ public class BucketParticleSystemCustom : MonoBehaviour
         get { return currentWaterAmount <= 0f; }
     }
 
+    public int ActiveParticleCount
+    {
+        get { return activeCount; }
+    }
+
     public float CurrentFlowRate
     {
         get { return lastCalculatedFlowRate; }
@@ -231,6 +357,19 @@ public class BucketParticleSystemCustom : MonoBehaviour
     public float CurrentWaterLevelFactor
     {
         get { return lastWaterLevelFactor; }
+    }
+
+    public float CurrentWater01
+    {
+        get
+        {
+            if (initialWaterAmount <= 0f)
+            {
+                return 0f;
+            }
+
+            return Mathf.Clamp01(currentWaterAmount / initialWaterAmount);
+        }
     }
 
     public void SetEmitter(Transform newEmitter)
@@ -267,6 +406,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
         currentWaterAmount = Mathf.Max(0f, initialWaterAmount);
         emissionAccumulator = 0f;
         waterWasInitialized = true;
+        UpdateBucketLiquidVisual(true);
     }
 
     public void SetCurrentWaterAmount(float amount)
@@ -277,12 +417,14 @@ public class BucketParticleSystemCustom : MonoBehaviour
             emissionAccumulator = 0f;
         }
         waterWasInitialized = true;
+        UpdateBucketLiquidVisual(true);
     }
 
     public void AddWater(float amount)
     {
         currentWaterAmount = Mathf.Clamp(currentWaterAmount + Mathf.Max(0f, amount), 0f, initialWaterAmount);
         waterWasInitialized = true;
+        UpdateBucketLiquidVisual(true);
     }
 
     public void EmitBurst(int count)
@@ -295,11 +437,16 @@ public class BucketParticleSystemCustom : MonoBehaviour
     {
         EnsureInitialized();
 
-        for (int i = 0; i < particles.Length; i++)
+        for (int a = 0; a < activeCount; a++)
         {
-            particles[i].active = false;
-            particles[i].stuckToCanvas = false;
+            int idx = activeIndices[a];
+            particles[idx].active = false;
+            particles[idx].stuckToCanvas = false;
+            activeSlots[idx] = -1;
         }
+
+        activeCount = 0;
+        simulationCursor = 0;
 
         freeTop = maxParticles;
         for (int i = 0; i < maxParticles; i++)
@@ -348,6 +495,22 @@ public class BucketParticleSystemCustom : MonoBehaviour
         maxCalculatedEmissionRate = Mathf.Max(1f, maxCalculatedEmissionRate);
         maxDistanceFromEmitter = Mathf.Max(1f, maxDistanceFromEmitter);
         maxDistanceBelowCanvas = Mathf.Max(0.1f, maxDistanceBelowCanvas);
+        autoLiquidLocalScale.x = Mathf.Max(0.001f, autoLiquidLocalScale.x);
+        autoLiquidLocalScale.y = Mathf.Max(0.001f, autoLiquidLocalScale.y);
+        autoLiquidLocalScale.z = Mathf.Max(0.001f, autoLiquidLocalScale.z);
+        sphSmoothingRadius = Mathf.Max(0.01f, sphSmoothingRadius);
+        sphParticleMass = Mathf.Max(0.0001f, sphParticleMass);
+        sphRestDensity = Mathf.Max(0.0001f, sphRestDensity);
+        sphMaxAcceleration = Mathf.Max(0.01f, sphMaxAcceleration);
+        maxSPHParticles = Mathf.Max(1, maxSPHParticles);
+        renderEveryNthParticle = Mathf.Max(1, renderEveryNthParticle);
+        maxRenderedParticles = Mathf.Max(1, maxRenderedParticles);
+        viewportCullingDisableThreshold = Mathf.Max(1, viewportCullingDisableThreshold);
+        maxParticlesSimulatedPerFixedStep = Mathf.Max(1, maxParticlesSimulatedPerFixedStep);
+        turboParticleThreshold = Mathf.Max(1, turboParticleThreshold);
+        turboRenderedParticleTarget = Mathf.Max(1, turboRenderedParticleTarget);
+        turboCanvasCollisionStride = Mathf.Max(1, turboCanvasCollisionStride);
+        maxEmittedPerFixedStep = Mathf.Max(1, maxEmittedPerFixedStep);
     }
 
     private void Start()
@@ -358,12 +521,15 @@ public class BucketParticleSystemCustom : MonoBehaviour
         {
             RefillBucket();
         }
+
+        UpdateBucketLiquidVisual(true);
     }
 
     private void OnEnable()
     {
         EnsureInitialized();
         lastEmitterPosition = GetEmitterPosition();
+        UpdateBucketLiquidVisual(true);
     }
 
     private void FixedUpdate()
@@ -391,6 +557,8 @@ public class BucketParticleSystemCustom : MonoBehaviour
             int requestedCount = Mathf.FloorToInt(emissionAccumulator);
             if (requestedCount > 0)
             {
+                // Anti-freeze safety: never create a massive burst after a frame hitch.
+                requestedCount = Mathf.Min(requestedCount, maxEmittedPerFixedStep);
                 int emittedCount = Emit(requestedCount);
 
                 if (emittedCount > 0)
@@ -413,6 +581,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
         }
 
         SimulateParticles(dt);
+        UpdateBucketLiquidVisual(false);
     }
 
     private void Update()
@@ -424,6 +593,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
             renderCamera = Camera.main;
         }
 
+        UpdateBucketLiquidVisual(false);
         RenderParticles();
     }
 
@@ -451,14 +621,20 @@ public class BucketParticleSystemCustom : MonoBehaviour
 
         particles = new Particle[maxParticles];
         freeStack = new int[maxParticles];
+        activeIndices = new int[maxParticles];
+        activeSlots = new int[maxParticles];
         freeTop = maxParticles;
+        activeCount = 0;
+        simulationCursor = 0;
 
         for (int i = 0; i < maxParticles; i++)
         {
             freeStack[i] = maxParticles - 1 - i;
+            activeSlots[i] = -1;
         }
 
         mpb = new MaterialPropertyBlock();
+        instancedMatrices = new Matrix4x4[MaxInstancesPerBatch];
 
         if (particleMesh == null)
         {
@@ -470,11 +646,354 @@ public class BucketParticleSystemCustom : MonoBehaviour
             particleMaterial = CreateFallbackMaterial();
         }
 
+        if (particleMaterial != null)
+        {
+            particleMaterial.enableInstancing = true;
+        }
+
         colorPropertyId = DetectColorProperty(particleMaterial);
+        EnsureSPHStorage();
+        InitializeBucketLiquidVisualIfNeeded();
         lastEmitterPosition = GetEmitterPosition();
         emitterVelocity = Vector3.zero;
         emissionAccumulator = 0f;
         initialized = true;
+    }
+
+    private void InitializeBucketLiquidVisualIfNeeded()
+    {
+        if (!updateBucketLiquidVisual)
+        {
+            return;
+        }
+
+        if (bucketLiquidVisual == null && autoCreateLiquidVisualIfMissing)
+        {
+            Transform parent = emitter != null ? emitter : transform;
+            GameObject liquidObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            liquidObject.name = "Visible Bucket Liquid";
+            liquidObject.transform.SetParent(parent, false);
+            liquidObject.transform.localPosition = autoLiquidLocalPosition;
+            liquidObject.transform.localRotation = Quaternion.identity;
+            liquidObject.transform.localScale = autoLiquidLocalScale;
+
+            Collider liquidCollider = liquidObject.GetComponent<Collider>();
+            if (liquidCollider != null)
+            {
+                Destroy(liquidCollider);
+            }
+
+            bucketLiquidVisual = liquidObject.transform;
+        }
+
+        if (bucketLiquidVisual == null)
+        {
+            return;
+        }
+
+        if (!liquidFullTransformCaptured)
+        {
+            liquidFullLocalPosition = bucketLiquidVisual.localPosition;
+            liquidFullLocalScale = bucketLiquidVisual.localScale;
+            liquidFullTransformCaptured = true;
+        }
+
+        if (cachedLiquidRenderer == null)
+        {
+            cachedLiquidRenderer = bucketLiquidVisual.GetComponent<Renderer>();
+        }
+
+        if (cachedLiquidRenderer != null && liquidMaterialInstance == null)
+        {
+            Material sourceMaterial = cachedLiquidRenderer.material;
+            if (sourceMaterial != null)
+            {
+                liquidMaterialInstance = sourceMaterial;
+            }
+            else
+            {
+                liquidMaterialInstance = CreateFallbackMaterial();
+                cachedLiquidRenderer.material = liquidMaterialInstance;
+            }
+        }
+    }
+
+    private void UpdateBucketLiquidVisual(bool instant)
+    {
+        if (!updateBucketLiquidVisual)
+        {
+            return;
+        }
+
+        InitializeBucketLiquidVisualIfNeeded();
+
+        if (bucketLiquidVisual == null)
+        {
+            return;
+        }
+
+        float water01 = CurrentWater01;
+
+        if (hideLiquidVisualWhenEmpty)
+        {
+            bool shouldShow = water01 > 0.001f;
+            if (bucketLiquidVisual.gameObject.activeSelf != shouldShow)
+            {
+                bucketLiquidVisual.gameObject.SetActive(shouldShow);
+            }
+
+            if (!shouldShow)
+            {
+                return;
+            }
+        }
+
+        Vector3 targetPosition = liquidFullLocalPosition + Vector3.up * emptyLiquidLocalYOffset * (1f - water01);
+        Vector3 targetScale = liquidFullLocalScale;
+        targetScale.y = liquidFullLocalScale.y * Mathf.Lerp(emptyLiquidScaleYMultiplier, 1f, water01);
+
+        if (instant || liquidVisualSmoothing <= 0f)
+        {
+            bucketLiquidVisual.localPosition = targetPosition;
+            bucketLiquidVisual.localScale = targetScale;
+        }
+        else
+        {
+            float lerpSpeed = 1f - Mathf.Pow(liquidVisualSmoothing, Time.deltaTime * 60f);
+            bucketLiquidVisual.localPosition = Vector3.Lerp(bucketLiquidVisual.localPosition, targetPosition, lerpSpeed);
+            bucketLiquidVisual.localScale = Vector3.Lerp(bucketLiquidVisual.localScale, targetScale, lerpSpeed);
+        }
+
+        UpdateLiquidMaterialColor();
+    }
+
+    private void UpdateLiquidMaterialColor()
+    {
+        if (cachedLiquidRenderer == null)
+        {
+            return;
+        }
+
+        Material mat = liquidMaterialInstance != null ? liquidMaterialInstance : cachedLiquidRenderer.material;
+        if (mat == null)
+        {
+            return;
+        }
+
+        Color finalColor = liquidUsesPaintColor ? startColor : liquidColor;
+        finalColor.a = liquidColor.a;
+
+        int id = DetectColorProperty(mat);
+        if (id >= 0)
+        {
+            mat.SetColor(id, finalColor);
+        }
+    }
+
+    private void EnsureSPHStorage()
+    {
+        if (sphDensities == null || sphDensities.Length != maxParticles)
+        {
+            sphDensities = new float[maxParticles];
+            sphPressures = new float[maxParticles];
+            sphAccelerations = new Vector3[maxParticles];
+        }
+
+        if (sphActiveIndices == null)
+        {
+            sphActiveIndices = new List<int>(Mathf.Min(maxParticles, Mathf.Max(1, maxSPHParticles)));
+        }
+
+        if (sphGrid == null)
+        {
+            sphGrid = new Dictionary<Vector3Int, List<int>>();
+        }
+    }
+
+    private void ComputeSPHAccelerations()
+    {
+        EnsureSPHStorage();
+
+        // Important for high counts: do not clear arrays of 500k every physics tick.
+        // Only reset the particles that were part of the previous SPH solve.
+        if (sphActiveIndices != null)
+        {
+            for (int a = 0; a < sphActiveIndices.Count; a++)
+            {
+                int idx = sphActiveIndices[a];
+                if (idx >= 0 && idx < sphAccelerations.Length)
+                {
+                    sphAccelerations[idx] = Vector3.zero;
+                    sphDensities[idx] = 0f;
+                    sphPressures[idx] = 0f;
+                }
+            }
+        }
+
+        if (!useSPHSimulation || particles == null || activeCount == 0)
+        {
+            return;
+        }
+
+        sphActiveIndices.Clear();
+        sphGrid.Clear();
+
+        int limit = Mathf.Min(maxSPHParticles, activeCount);
+        float h = Mathf.Max(0.01f, sphSmoothingRadius);
+        float h2 = h * h;
+
+        // SPH is intentionally limited. The full 500k stream should be rendered/simulated cheaply,
+        // while only a small front sample receives neighbor interaction.
+        for (int a = 0; a < activeCount && sphActiveIndices.Count < limit; a++)
+        {
+            int i = activeIndices[a];
+            if (!particles[i].active || particles[i].stuckToCanvas)
+            {
+                continue;
+            }
+
+            sphAccelerations[i] = Vector3.zero;
+            sphDensities[i] = 0f;
+            sphPressures[i] = 0f;
+            sphActiveIndices.Add(i);
+            Vector3Int cell = PositionToSPHCell(particles[i].position, h);
+
+            List<int> cellList;
+            if (!sphGrid.TryGetValue(cell, out cellList))
+            {
+                cellList = new List<int>(8);
+                sphGrid.Add(cell, cellList);
+            }
+
+            cellList.Add(i);
+        }
+
+        if (sphActiveIndices.Count <= 1)
+        {
+            return;
+        }
+
+        float h6 = h2 * h2 * h2;
+        float h9 = h6 * h2 * h;
+        float poly6 = 315f / (64f * Mathf.PI * Mathf.Max(0.000001f, h9));
+        float spikyGradient = 45f / (Mathf.PI * Mathf.Max(0.000001f, h6));
+        float viscosityLaplacian = 45f / (Mathf.PI * Mathf.Max(0.000001f, h6));
+
+        for (int a = 0; a < sphActiveIndices.Count; a++)
+        {
+            int i = sphActiveIndices[a];
+            Vector3 pi = particles[i].position;
+            float density = 0f;
+
+            ForEachSPHNeighbor(pi, h, (j) =>
+            {
+                Vector3 delta = particles[j].position - pi;
+                float r2 = delta.sqrMagnitude;
+                if (r2 > h2)
+                {
+                    return;
+                }
+
+                float kernelValue = h2 - r2;
+                density += sphParticleMass * poly6 * kernelValue * kernelValue * kernelValue;
+            });
+
+            sphDensities[i] = Mathf.Max(0.0001f, density);
+            sphPressures[i] = Mathf.Max(0f, (sphDensities[i] - sphRestDensity) * sphPressureStiffness);
+        }
+
+        for (int a = 0; a < sphActiveIndices.Count; a++)
+        {
+            int i = sphActiveIndices[a];
+            Vector3 pi = particles[i].position;
+            Vector3 vi = particles[i].velocity;
+            Vector3 force = Vector3.zero;
+
+            ForEachSPHNeighbor(pi, h, (j) =>
+            {
+                if (j == i)
+                {
+                    return;
+                }
+
+                Vector3 delta = particles[j].position - pi;
+                float r2 = delta.sqrMagnitude;
+                if (r2 <= 0.0000001f || r2 > h2)
+                {
+                    return;
+                }
+
+                float r = Mathf.Sqrt(r2);
+                Vector3 dirToNeighbor = delta / r;
+                float q = Mathf.Clamp01(1f - r / h);
+                float neighborDensity = Mathf.Max(0.0001f, sphDensities[j]);
+
+                float pressureMagnitude =
+                    sphParticleMass *
+                    (sphPressures[i] + sphPressures[j]) /
+                    (2f * neighborDensity) *
+                    spikyGradient *
+                    (h - r) *
+                    (h - r);
+
+                Vector3 pressureForce = -dirToNeighbor * pressureMagnitude;
+
+                Vector3 viscosityForce =
+                    sphViscosityStrength *
+                    sphParticleMass *
+                    (particles[j].velocity - vi) /
+                    neighborDensity *
+                    viscosityLaplacian *
+                    (h - r);
+
+                Vector3 cohesionForce = dirToNeighbor * (sphSurfaceTensionStrength * q * q);
+
+                force += pressureForce + viscosityForce + cohesionForce;
+            });
+
+            Vector3 acceleration = force / Mathf.Max(0.0001f, sphDensities[i]);
+            sphAccelerations[i] = Vector3.ClampMagnitude(acceleration, sphMaxAcceleration);
+            particles[i].density = sphDensities[i];
+            particles[i].pressure = sphPressures[i];
+        }
+    }
+
+    private delegate void SPHNeighborAction(int particleIndex);
+
+    private void ForEachSPHNeighbor(Vector3 position, float h, SPHNeighborAction action)
+    {
+        Vector3Int centerCell = PositionToSPHCell(position, h);
+
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vector3Int cell = new Vector3Int(centerCell.x + x, centerCell.y + y, centerCell.z + z);
+                    List<int> cellList;
+                    if (!sphGrid.TryGetValue(cell, out cellList))
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i < cellList.Count; i++)
+                    {
+                        action(cellList[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    private Vector3Int PositionToSPHCell(Vector3 position, float h)
+    {
+        float invH = 1f / Mathf.Max(0.0001f, h);
+        return new Vector3Int(
+            Mathf.FloorToInt(position.x * invH),
+            Mathf.FloorToInt(position.y * invH),
+            Mathf.FloorToInt(position.z * invH)
+        );
     }
 
     private void UpdateEmitterVelocity(float dt)
@@ -583,6 +1102,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
 
             int idx = freeStack[--freeTop];
             InitializeParticle(ref particles[idx]);
+            AddActiveIndex(idx);
             emitted++;
         }
 
@@ -596,6 +1116,8 @@ public class BucketParticleSystemCustom : MonoBehaviour
         p.position = GetOutletEmissionPosition();
         p.size = Random.Range(sizeMin, sizeMax);
         p.color = startColor;
+        p.density = 0f;
+        p.pressure = 0f;
 
         Vector3 dir = SampleDirectionInCone(GetOutletShapeSpreadAngle());
         float speed = Random.Range(initialSpeedMin, initialSpeedMax);
@@ -704,14 +1226,115 @@ public class BucketParticleSystemCustom : MonoBehaviour
         return (rotationToDirection * local).normalized;
     }
 
+    private bool IsTurboModeActive()
+    {
+        return autoTurboMode && activeCount >= turboParticleThreshold;
+    }
+
+    private bool IsSPHEnabledThisStep()
+    {
+        if (!useSPHSimulation)
+        {
+            return false;
+        }
+
+        if (IsTurboModeActive() && disableSPHInTurboMode)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ClearPreviousSPHAccelerations()
+    {
+        if (sphActiveIndices == null || sphAccelerations == null)
+        {
+            return;
+        }
+
+        for (int a = 0; a < sphActiveIndices.Count; a++)
+        {
+            int idx = sphActiveIndices[a];
+            if (idx >= 0 && idx < sphAccelerations.Length)
+            {
+                sphAccelerations[idx] = Vector3.zero;
+                if (sphDensities != null && idx < sphDensities.Length) sphDensities[idx] = 0f;
+                if (sphPressures != null && idx < sphPressures.Length) sphPressures[idx] = 0f;
+            }
+        }
+
+        sphActiveIndices.Clear();
+        if (sphGrid != null)
+        {
+            sphGrid.Clear();
+        }
+    }
+
+    private int GetAdaptiveRenderStride()
+    {
+        int stride = Mathf.Max(1, renderEveryNthParticle);
+        int target = maxRenderedParticles;
+
+        if (IsTurboModeActive())
+        {
+            target = Mathf.Min(target, turboRenderedParticleTarget);
+        }
+
+        if (activeCount > target)
+        {
+            stride = Mathf.Max(stride, Mathf.CeilToInt(activeCount / (float)Mathf.Max(1, target)));
+        }
+
+        return stride;
+    }
+
     private void SimulateParticles(float dt)
     {
         Vector3 gravity = Vector3.down * gravityAcceleration * gravityScale;
 
-        for (int i = 0; i < particles.Length; i++)
+        if (activeCount == 0)
         {
+            ClearPreviousSPHAccelerations();
+            return;
+        }
+
+        bool turboMode = IsTurboModeActive();
+        bool sphEnabledThisStep = IsSPHEnabledThisStep();
+        if (sphEnabledThisStep)
+        {
+            ComputeSPHAccelerations();
+        }
+        else
+        {
+            ClearPreviousSPHAccelerations();
+        }
+
+        bool useBudgetNow = (useSimulationBudget || turboMode) && activeCount > maxParticlesSimulatedPerFixedStep;
+        int processLimit = useBudgetNow ? Mathf.Min(maxParticlesSimulatedPerFixedStep, activeCount) : activeCount;
+        int cursor = useBudgetNow ? Mathf.Clamp(simulationCursor, 0, activeCount - 1) : 0;
+        float stepDt = useBudgetNow ? dt * Mathf.Ceil(activeCount / (float)processLimit) : dt;
+        int processed = 0;
+
+        while (activeCount > 0 && processed < processLimit)
+        {
+            if (useBudgetNow)
+            {
+                if (cursor >= activeCount)
+                {
+                    cursor = 0;
+                }
+            }
+            else if (cursor >= activeCount)
+            {
+                break;
+            }
+
+            int i = activeIndices[cursor];
             if (!particles[i].active)
             {
+                RemoveActiveIndex(i);
+                processed++;
                 continue;
             }
 
@@ -720,22 +1343,33 @@ public class BucketParticleSystemCustom : MonoBehaviour
             if (p.stuckToCanvas)
             {
                 particles[i] = p;
+                cursor++;
+                processed++;
                 continue;
             }
 
             Vector3 previousPosition = p.position;
 
             Vector3 dragAcc = (-drag / particleMass) * p.velocity;
-            p.acceleration = gravity + dragAcc;
+            Vector3 sphAcc = (sphEnabledThisStep && sphAccelerations != null && i < sphAccelerations.Length)
+                ? sphAccelerations[i] * sphInfluence
+                : Vector3.zero;
+            p.acceleration = gravity + dragAcc + sphAcc;
 
-            p.velocity += p.acceleration * dt;
-            Vector3 nextPosition = p.position + p.velocity * dt;
+            p.velocity += p.acceleration * stepDt;
+            Vector3 nextPosition = p.position + p.velocity * stepDt;
 
             float radius = p.size * particleRadiusMultiplier;
 
             bool hitCanvas = false;
             bool removeAfterHit = false;
-            if (useManualCanvasCollision && paintCanvas != null)
+            bool allowCanvasCollision = useManualCanvasCollision && paintCanvas != null;
+            if (turboMode && turboCanvasCollisionStride > 1 && (processed % turboCanvasCollisionStride) != 0)
+            {
+                allowCanvasCollision = false;
+            }
+
+            if (allowCanvasCollision)
             {
                 hitCanvas = ResolveManualCanvasCollision(previousPosition, ref nextPosition, ref p.velocity, radius, ref p, out removeAfterHit);
             }
@@ -743,6 +1377,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
             if (removeAfterHit)
             {
                 Recycle(i);
+                processed++;
                 continue;
             }
 
@@ -762,8 +1397,15 @@ public class BucketParticleSystemCustom : MonoBehaviour
             if (recycleWhenTooFar && ShouldRecycleParticle(p.position))
             {
                 Recycle(i);
+                processed++;
+                continue;
             }
+
+            cursor++;
+            processed++;
         }
+
+        simulationCursor = useBudgetNow && activeCount > 0 ? cursor % activeCount : 0;
     }
 
     private bool ResolveManualCanvasCollision(
@@ -955,10 +1597,70 @@ public class BucketParticleSystemCustom : MonoBehaviour
         }
     }
 
+    private void AddActiveIndex(int particleIndex)
+    {
+        if (activeSlots == null || activeIndices == null)
+        {
+            return;
+        }
+
+        if (particleIndex < 0 || particleIndex >= activeSlots.Length)
+        {
+            return;
+        }
+
+        if (activeSlots[particleIndex] >= 0)
+        {
+            return;
+        }
+
+        activeSlots[particleIndex] = activeCount;
+        activeIndices[activeCount] = particleIndex;
+        activeCount++;
+    }
+
+    private void RemoveActiveIndex(int particleIndex)
+    {
+        if (activeSlots == null || activeIndices == null)
+        {
+            return;
+        }
+
+        if (particleIndex < 0 || particleIndex >= activeSlots.Length)
+        {
+            return;
+        }
+
+        int slot = activeSlots[particleIndex];
+        if (slot < 0 || slot >= activeCount)
+        {
+            activeSlots[particleIndex] = -1;
+            return;
+        }
+
+        int lastSlot = activeCount - 1;
+        int lastParticle = activeIndices[lastSlot];
+        activeIndices[slot] = lastParticle;
+        activeSlots[lastParticle] = slot;
+        activeSlots[particleIndex] = -1;
+        activeCount--;
+    }
+
     private void Recycle(int particleIndex)
     {
+        if (particleIndex < 0 || particles == null || particleIndex >= particles.Length)
+        {
+            return;
+        }
+
+        if (!particles[particleIndex].active)
+        {
+            return;
+        }
+
         particles[particleIndex].active = false;
         particles[particleIndex].stuckToCanvas = false;
+        RemoveActiveIndex(particleIndex);
 
         if (freeTop < freeStack.Length)
         {
@@ -968,31 +1670,125 @@ public class BucketParticleSystemCustom : MonoBehaviour
 
     private void RenderParticles()
     {
-        if (particleMesh == null || particleMaterial == null)
+        if (particleMesh == null || particleMaterial == null || activeCount == 0)
         {
             return;
         }
 
+        if (useInstancedRendering && SystemInfo.supportsInstancing)
+        {
+            RenderParticlesInstanced();
+        }
+        else
+        {
+            // Legacy rendering means one draw call per particle. In turbo mode that is a guaranteed freeze.
+            if (IsTurboModeActive())
+            {
+                return;
+            }
+            RenderParticlesLegacy();
+        }
+    }
+
+    private void RenderParticlesInstanced()
+    {
+        if (instancedMatrices == null || instancedMatrices.Length != MaxInstancesPerBatch)
+        {
+            instancedMatrices = new Matrix4x4[MaxInstancesPerBatch];
+        }
+
         Quaternion billboardRotation = renderCamera != null ? renderCamera.transform.rotation : Quaternion.identity;
         Quaternion canvasRotation = paintCanvas != null ? Quaternion.LookRotation(GetCanvasNormal()) : Quaternion.identity;
+        bool skipCull = !cullOffscreen ||
+                        (skipViewportCullingWhenManyParticles && activeCount >= viewportCullingDisableThreshold) ||
+                        renderCamera == null;
 
-        for (int i = 0; i < particles.Length; i++)
+        mpb.Clear();
+        if (colorPropertyId >= 0)
         {
-            Particle p = particles[i];
+            mpb.SetColor(colorPropertyId, startColor);
+        }
+
+        int batchCount = 0;
+        int rendered = 0;
+        int stride = GetAdaptiveRenderStride();
+
+        for (int a = 0; a < activeCount && rendered < maxRenderedParticles; a += stride)
+        {
+            Particle p = particles[activeIndices[a]];
             if (!p.active)
             {
                 continue;
             }
 
-            if (cullOffscreen && renderCamera != null)
+            if (!skipCull && IsParticleOutsideCamera(p.position))
             {
-                Vector3 vp = renderCamera.WorldToViewportPoint(p.position);
-                if (vp.z < 0f ||
-                    vp.x < -viewportCullMargin || vp.x > 1f + viewportCullMargin ||
-                    vp.y < -viewportCullMargin || vp.y > 1f + viewportCullMargin)
-                {
-                    continue;
-                }
+                continue;
+            }
+
+            Quaternion rotation;
+            if (p.stuckToCanvas && paintCanvas != null)
+            {
+                rotation = canvasRotation;
+            }
+            else
+            {
+                rotation = billboardToCamera ? billboardRotation : Quaternion.identity;
+            }
+
+            instancedMatrices[batchCount] = Matrix4x4.TRS(p.position, rotation, Vector3.one * p.size);
+            batchCount++;
+            rendered++;
+
+            if (batchCount == MaxInstancesPerBatch)
+            {
+                FlushInstancedBatch(batchCount);
+                batchCount = 0;
+            }
+        }
+
+        if (batchCount > 0)
+        {
+            FlushInstancedBatch(batchCount);
+        }
+    }
+
+    private void FlushInstancedBatch(int batchCount)
+    {
+        Graphics.DrawMeshInstanced(
+            particleMesh,
+            0,
+            particleMaterial,
+            instancedMatrices,
+            batchCount,
+            mpb,
+            castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off,
+            receiveShadows,
+            gameObject.layer,
+            null,
+            LightProbeUsage.Off
+        );
+    }
+
+    private void RenderParticlesLegacy()
+    {
+        Quaternion billboardRotation = renderCamera != null ? renderCamera.transform.rotation : Quaternion.identity;
+        Quaternion canvasRotation = paintCanvas != null ? Quaternion.LookRotation(GetCanvasNormal()) : Quaternion.identity;
+        bool skipCull = !cullOffscreen || renderCamera == null;
+        int rendered = 0;
+        int stride = GetAdaptiveRenderStride();
+
+        for (int a = 0; a < activeCount && rendered < maxRenderedParticles; a += stride)
+        {
+            Particle p = particles[activeIndices[a]];
+            if (!p.active)
+            {
+                continue;
+            }
+
+            if (!skipCull && IsParticleOutsideCamera(p.position))
+            {
+                continue;
             }
 
             Quaternion rotation;
@@ -1007,14 +1803,10 @@ public class BucketParticleSystemCustom : MonoBehaviour
 
             Matrix4x4 matrix = Matrix4x4.TRS(p.position, rotation, Vector3.one * p.size);
 
+            mpb.Clear();
             if (colorPropertyId >= 0)
             {
-                mpb.Clear();
                 mpb.SetColor(colorPropertyId, p.color);
-            }
-            else
-            {
-                mpb.Clear();
             }
 
             Graphics.DrawMesh(
@@ -1029,7 +1821,22 @@ public class BucketParticleSystemCustom : MonoBehaviour
                 receiveShadows,
                 false
             );
+
+            rendered++;
         }
+    }
+
+    private bool IsParticleOutsideCamera(Vector3 position)
+    {
+        if (renderCamera == null)
+        {
+            return false;
+        }
+
+        Vector3 vp = renderCamera.WorldToViewportPoint(position);
+        return vp.z < 0f ||
+               vp.x < -viewportCullMargin || vp.x > 1f + viewportCullMargin ||
+               vp.y < -viewportCullMargin || vp.y > 1f + viewportCullMargin;
     }
 
     private Vector3 GetEmitterPosition()
@@ -1205,7 +2012,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
             Vector3 p3 = paintCanvas.TransformPoint(new Vector3(halfWidth, 0f, halfLength));
             Vector3 p4 = paintCanvas.TransformPoint(new Vector3(-halfWidth, 0f, halfLength));
 
-            Gizmos.color = new Color(0f, 0.5f, 1f, 0.85f);
+            Gizmos.color = new Color(1.0f, 0.4117647f, 0.7058824f, 1.0f);
             Gizmos.DrawLine(p1, p2);
             Gizmos.DrawLine(p2, p3);
             Gizmos.DrawLine(p3, p4);
@@ -1218,7 +2025,7 @@ public class BucketParticleSystemCustom : MonoBehaviour
 
         if (collideWithGround)
         {
-            Gizmos.color = new Color(0f, 1f, 0f, 0.35f);
+            Gizmos.color = new Color(1.0f, 0.4117647f, 0.7058824f, 1.0f);
             Gizmos.DrawLine(new Vector3(-2f, groundY, -2f), new Vector3(2f, groundY, -2f));
             Gizmos.DrawLine(new Vector3(2f, groundY, -2f), new Vector3(2f, groundY, 2f));
             Gizmos.DrawLine(new Vector3(2f, groundY, 2f), new Vector3(-2f, groundY, 2f));

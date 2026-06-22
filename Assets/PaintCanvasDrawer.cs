@@ -22,14 +22,38 @@ public class PaintCanvasDrawer : MonoBehaviour
     [Header("Brush")]
     [SerializeField, Range(0f, 1f)] private float brushOpacity = 0.9f;
     [SerializeField, Range(0f, 1f)] private float softEdge = 0.65f;
-    [SerializeField, Min(0)] private int splatterCount = 6;
+    [SerializeField, Min(0)] private int splatterCount = 1;
     [SerializeField, Min(0f)] private float splatterDistanceMultiplier = 2.2f;
     [SerializeField, Range(0.05f, 1f)] private float splatterSizeMultiplier = 0.28f;
 
+    [Header("High Count Paint Optimization")]
+    [Tooltip("Limits how many paint stamps can modify the texture each frame. This prevents hundreds of thousands of impacts from freezing the CPU.")]
+    [SerializeField] private bool usePaintBudget = true;
+
+    [SerializeField, Min(1)] private int maxPaintStampsPerFrame = 30;
+
+    [Tooltip("Upload only the changed rectangle instead of the full texture when possible.")]
+    [SerializeField] private bool useDirtyRectUpload = true;
+
+    [Tooltip("Minimum time between texture uploads. 0 = upload every frame when dirty.")]
+    [SerializeField, Range(0f, 0.2f)] private float textureApplyInterval = 0.033f;
+
+    [Tooltip("Safety clamp for brush radius in pixels. Big radii create huge nested pixel loops.")]
+    [SerializeField, Min(1)] private int maxBrushRadiusPixels = 18;
+
     private Texture2D canvasTexture;
     private Color[] pixels;
+    private Color[] dirtyUploadBuffer;
     private Renderer cachedRenderer;
     private bool dirty;
+    private bool dirtyRectValid;
+    private int dirtyMinX;
+    private int dirtyMinY;
+    private int dirtyMaxX;
+    private int dirtyMaxY;
+    private float nextAllowedTextureApplyTime;
+    private int paintBudgetFrame = -1;
+    private int paintStampsThisFrame;
     private int texturePropertyId = -1;
 
     private void Awake()
@@ -56,6 +80,8 @@ public class PaintCanvasDrawer : MonoBehaviour
         textureHeight = Mathf.Max(64, textureHeight);
         canvasWidth = Mathf.Max(0.01f, canvasWidth);
         canvasLength = Mathf.Max(0.01f, canvasLength);
+        maxBrushRadiusPixels = Mathf.Max(1, maxBrushRadiusPixels);
+        maxPaintStampsPerFrame = Mathf.Max(1, maxPaintStampsPerFrame);
 
         cachedRenderer = GetComponent<Renderer>();
 
@@ -127,7 +153,7 @@ public class PaintCanvasDrawer : MonoBehaviour
             pixels[i] = color;
         }
 
-        dirty = true;
+        MarkFullTextureDirty();
     }
 
     [Header("Impact And Splatter Algorithm")]
@@ -201,6 +227,11 @@ public class PaintCanvasDrawer : MonoBehaviour
         float viscosity01,
         Vector3 impactDirectionWorld)
     {
+        if (!TryConsumePaintBudget())
+        {
+            return false;
+        }
+
         EnsureCanvasReady();
 
         int centerX;
@@ -224,7 +255,7 @@ public class PaintCanvasDrawer : MonoBehaviour
         float viscosityRadiusFactor = Mathf.Lerp(1.35f, 0.75f, viscosity01);
         float finalWorldRadius = worldRadius * baseSpotRadiusMultiplier * speedRadiusFactor * viscosityRadiusFactor;
 
-        int baseRadiusPixels = Mathf.Max(1, WorldRadiusToPixels(finalWorldRadius));
+        int baseRadiusPixels = Mathf.Clamp(WorldRadiusToPixels(finalWorldRadius), 1, maxBrushRadiusPixels);
 
         int majorRadius = Mathf.Max(
             1,
@@ -364,6 +395,8 @@ public class PaintCanvasDrawer : MonoBehaviour
                 BlendPixel(x, y, paintColor, finalOpacity);
             }
         }
+
+        MarkDirtyRect(minX, minY, maxX, maxY);
     }
 
     private Vector2 WorldDirectionToPixelDirection(Vector3 worldDirection)
@@ -492,6 +525,8 @@ public class PaintCanvasDrawer : MonoBehaviour
                 BlendPixel(x, y, paintColor, finalOpacity);
             }
         }
+
+        MarkDirtyRect(minX, minY, maxX, maxY);
     }
 
     private void BlendPixel(int x, int y, Color paintColor, float opacity)
@@ -549,6 +584,63 @@ public class PaintCanvasDrawer : MonoBehaviour
         return Mathf.Max(1, Mathf.RoundToInt(worldRadius * pixelsPerWorld));
     }
 
+    private bool TryConsumePaintBudget()
+    {
+        if (!usePaintBudget)
+        {
+            return true;
+        }
+
+        if (paintBudgetFrame != Time.frameCount)
+        {
+            paintBudgetFrame = Time.frameCount;
+            paintStampsThisFrame = 0;
+        }
+
+        if (paintStampsThisFrame >= maxPaintStampsPerFrame)
+        {
+            return false;
+        }
+
+        paintStampsThisFrame++;
+        return true;
+    }
+
+    private void MarkFullTextureDirty()
+    {
+        dirty = true;
+        dirtyRectValid = true;
+        dirtyMinX = 0;
+        dirtyMinY = 0;
+        dirtyMaxX = textureWidth - 1;
+        dirtyMaxY = textureHeight - 1;
+    }
+
+    private void MarkDirtyRect(int minX, int minY, int maxX, int maxY)
+    {
+        dirty = true;
+
+        minX = Mathf.Clamp(minX, 0, textureWidth - 1);
+        minY = Mathf.Clamp(minY, 0, textureHeight - 1);
+        maxX = Mathf.Clamp(maxX, 0, textureWidth - 1);
+        maxY = Mathf.Clamp(maxY, 0, textureHeight - 1);
+
+        if (!dirtyRectValid)
+        {
+            dirtyMinX = minX;
+            dirtyMinY = minY;
+            dirtyMaxX = maxX;
+            dirtyMaxY = maxY;
+            dirtyRectValid = true;
+            return;
+        }
+
+        dirtyMinX = Mathf.Min(dirtyMinX, minX);
+        dirtyMinY = Mathf.Min(dirtyMinY, minY);
+        dirtyMaxX = Mathf.Max(dirtyMaxX, maxX);
+        dirtyMaxY = Mathf.Max(dirtyMaxY, maxY);
+    }
+
     private void ApplyTextureChangesIfNeeded(bool force = false)
     {
         if (canvasTexture == null || pixels == null)
@@ -561,9 +653,48 @@ public class PaintCanvasDrawer : MonoBehaviour
             return;
         }
 
-        canvasTexture.SetPixels(pixels);
+        if (!force && textureApplyInterval > 0f && Time.time < nextAllowedTextureApplyTime)
+        {
+            return;
+        }
+
+        if (useDirtyRectUpload && dirtyRectValid)
+        {
+            ApplyDirtyRectToTexture();
+        }
+        else
+        {
+            canvasTexture.SetPixels(pixels);
+        }
+
         canvasTexture.Apply(false);
         dirty = false;
+        dirtyRectValid = false;
+        nextAllowedTextureApplyTime = Time.time + textureApplyInterval;
+    }
+
+    private void ApplyDirtyRectToTexture()
+    {
+        int width = Mathf.Max(1, dirtyMaxX - dirtyMinX + 1);
+        int height = Mathf.Max(1, dirtyMaxY - dirtyMinY + 1);
+        int requiredLength = width * height;
+
+        if (dirtyUploadBuffer == null || dirtyUploadBuffer.Length != requiredLength)
+        {
+            dirtyUploadBuffer = new Color[requiredLength];
+        }
+
+        int write = 0;
+        for (int y = dirtyMinY; y <= dirtyMaxY; y++)
+        {
+            int rowStart = y * textureWidth + dirtyMinX;
+            for (int x = 0; x < width; x++)
+            {
+                dirtyUploadBuffer[write++] = pixels[rowStart + x];
+            }
+        }
+
+        canvasTexture.SetPixels(dirtyMinX, dirtyMinY, width, height, dirtyUploadBuffer);
     }
 
     private void EnsureCanvasReady()
