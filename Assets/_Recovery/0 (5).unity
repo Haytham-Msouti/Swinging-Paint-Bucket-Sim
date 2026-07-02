@@ -965,17 +965,17 @@ MonoBehaviour:
   currentWaterAmount: 500000
   waterPerParticle: 0.02
   stopWhenBucketEmpty: 1
-  updateBucketLiquidVisual: 0
-  bucketLiquidVisual: {fileID: 0}
-  autoCreateLiquidVisualIfMissing: 0
+  updateBucketLiquidVisual: 1
+  bucketLiquidVisual: {fileID: 1539557225}
+  autoCreateLiquidVisualIfMissing: 1
   autoLiquidLocalPosition: {x: 0, y: 0, z: 0}
-  autoLiquidLocalScale: {x: 0, y: 0, z: 0}
-  emptyLiquidLocalYOffset: 0
-  emptyLiquidScaleYMultiplier: 0.001
-  hideLiquidVisualWhenEmpty: 0
-  liquidUsesPaintColor: 0
-  liquidColor: {r: 0.21568629, g: 0.21568629, b: 0.21568629, a: 1}
-  liquidVisualSmoothing: 0
+  autoLiquidLocalScale: {x: 0.65, y: 0.035, z: 0.65}
+  emptyLiquidLocalYOffset: -0.35
+  emptyLiquidScaleYMultiplier: 0.03
+  hideLiquidVisualWhenEmpty: 1
+  liquidUsesPaintColor: 1
+  liquidColor: {r: 1, g: 0.4117647, b: 0.7058824, a: 1}
+  liquidVisualSmoothing: 0.15
   emissionEnabled: 1
   maxParticles: 500000
   emissionRate: 250000
@@ -988,7 +988,7 @@ MonoBehaviour:
   inheritEmitterVelocity: 0.074
   sizeMin: 2
   sizeMax: 4
-  startColor: {r: 0.37254903, g: 0.37254903, b: 0.37254903, a: 1}
+  startColor: {r: 1, g: 0.4117647, b: 0.7058824, a: 1}
   paintViscosity: 0.45
   useSPHSimulation: 1
   sphInfluence: 1
@@ -1009,7 +1009,7 @@ MonoBehaviour:
   flowRateMultiplier: 1
   outletSizeMultiplier: 1
   waterLevelPower: 1
-  wateryViscosityResistance: 2
+  wateryViscosityResistance: 0.45
   thickViscosityResistance: 2.25
   maxCalculatedEmissionRate: 500000
   particleMass: 1
@@ -1057,7 +1057,7 @@ MonoBehaviour:
   turboRenderedParticleTarget: 500000
   turboCanvasCollisionStride: 1
   maxEmittedPerFixedStep: 500000
-  renderParticleSize: 0.1
+  renderParticleSize: 0.012
   drawParticles: 1
   showStatsOnGUI: 1
 --- !u!114 &1225185329
@@ -1075,44 +1075,23 @@ MonoBehaviour:
   source: {fileID: 1225185328}
   bucketRoot: {fileID: 1539557225}
   renderCamera: {fileID: 330585545}
-  autoReadOutletFromSource: 1
-  visualOutletShape: 0
-  useSourceEmissionOffset: 1
-  useSourceEmissionDirection: 1
-  outletLocalDirection: {x: 0, y: 0, z: -1}
   localCenterOffset: {x: 0, y: 0, z: 0}
-  bucketBottomY: -0.42
-  bucketTopY: 0.1
-  bottomRadius: 0.01
-  topRadius: 0.27
-  keepFlowVisualsInsideBucket: 1
-  insideWallPaddingMultiplier: 0.88
-  bottomClampPadding: 0.035
-  surfaceClampPadding: 0.012
-  drainTargetRadiusFactor: 0.72
+  bucketBottomY: -0.35
+  bucketTopY: 0.55
+  bottomRadius: 0.32
+  topRadius: 0.62
   showInsideTracers: 1
-  tracerCount: 25000
-  tracerSize: 0.003
-  fallingTracerSize: 0.012
+  tracerCount: 90
+  tracerSize: 0.018
   idleVerticalSpeed: 0.035
   flowVerticalSpeed: 0.42
   swirlSpeed: 2.4
-  vortexStrength: 1.65
-  drainPullStrength: 1.25
-  turbulenceAmount: 0.16
-  vortexCoreRadius: 0.22
   flowRateForFullMotion: 18000
-  showOutletAwarePaths: 1
-  maxPreviewPaths: 12
-  previewPathWidth: 0.008
-  outletPreviewScale: 1
-  showVortexPath: 1
-  vortexPathWidth: 0.012
-  vortexTurns: 3.2
-  showLevelSurface: 0
-  showLevelBar: 0
-  showFlowArrow: 0
-  showText: 0
+  outletLocalDirection: {x: 0, y: 0, z: -1}
+  showLevelSurface: 1
+  showLevelBar: 1
+  showFlowArrow: 1
+  showText: 1
   levelBarLocalPosition: {x: 0.72, y: 0.1, z: 0}
   textLocalPosition: {x: 0.88, y: 0.64, z: 0}
   levelBarHeight: 0.85
@@ -1124,7 +1103,6 @@ MonoBehaviour:
   barBackColor: {r: 1, g: 1, b: 1, a: 0.18}
   barFillColor: {r: 0.1, g: 0.65, b: 1, a: 0.78}
   arrowColor: {r: 0.1, g: 1, b: 0.65, a: 0.95}
-  vortexColor: {r: 0.6, g: 0.95, b: 1, a: 0.62}
   textColor: {r: 1, g: 1, b: 1, a: 1}
 --- !u!1 &1328917493
 GameObject:
@@ -1412,7 +1390,7 @@ Transform:
   m_GameObject: {fileID: 1921812789}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.4, y: 41, z: -0.4}
+  m_LocalPosition: {x: -0.4, y: 41.2, z: -0.4}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -1441,15 +1419,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f142c8a37c69d5145a09578d7f58c0bf, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0.36
+      value: 0.49
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f142c8a37c69d5145a09578d7f58c0bf, type: 3}
       propertyPath: m_LocalPosition.y
-      value: -33.69
+      value: -31.184805
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f142c8a37c69d5145a09578d7f58c0bf, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0.69
+      value: 1.3654026
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f142c8a37c69d5145a09578d7f58c0bf, type: 3}
       propertyPath: m_LocalRotation.w

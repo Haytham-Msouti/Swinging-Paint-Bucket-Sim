@@ -1,0 +1,396 @@
+#pragma kernel EmitFromOutlet
+#pragma kernel ClearGrid
+#pragma kernel BuildGrid
+#pragma kernel ComputeDensityPressure
+#pragma kernel ComputeForcesIntegrate
+
+#define THREADS 256
+#define PI 3.14159265359
+
+struct Particle
+{
+    float3 position;
+    float3 velocity;
+    float density;
+    float pressure;
+};
+
+RWStructuredBuffer<Particle> _Particles;
+RWStructuredBuffer<uint> _CellCounts;
+RWStructuredBuffer<uint> _CellParticles;
+
+int _ParticleCount;
+int _GridResolution;
+int _CellsCount;
+int _MaxParticlesPerCell;
+
+float _BoundsSize;
+float _HalfBoundsSize;
+float _CellSize;
+float _InvCellSize;
+float3 _BoundsCenter;
+float _GroundY;
+int _CollideWithGround;
+
+float _DeltaTime;
+float _SmoothingRadius;
+float _ParticleMass;
+float _RestDensity;
+float _PressureStiffness;
+float _Viscosity;
+float _SurfaceTension;
+float _Gravity;
+float _Drag;
+float _MaxVelocity;
+float _MaxAcceleration;
+float _BoundaryDamping;
+
+int _EmitCount;
+int _EmissionCursor;
+float3 _OutletPosition;
+float3 _OutletDirection;
+float3 _OutletRight;
+float3 _OutletUp;
+float3 _EmitterVelocity;
+float _OutletRadius;
+float _OutletSpeedMin;
+float _OutletSpeedMax;
+float _RandomVelocityJitter;
+float _RandomSeed;
+int _OutletShape;
+float _LineOutletLength;
+int _MultipleHoleCount;
+float _MultipleHoleSpacing;
+float _ShapeJitter;
+float _SpreadTan;
+float _ParticleSizeMin;
+float _ParticleSizeMax;
+
+uint WangHash(uint x)
+{
+    x = (x ^ 61u) ^ (x >> 16u);
+    x *= 9u;
+    x = x ^ (x >> 4u);
+    x *= 0x27d4eb2du;
+    x = x ^ (x >> 15u);
+    return x;
+}
+
+float Random01(uint seed)
+{
+    return (WangHash(seed) & 0x00FFFFFFu) / 16777216.0;
+}
+
+int3 PositionToCell(float3 position)
+{
+    float3 minBounds = _BoundsCenter - _HalfBoundsSize.xxx;
+    int3 cell = (int3)floor((position - minBounds) * _InvCellSize);
+    cell = clamp(cell, int3(0, 0, 0), int3(_GridResolution - 1, _GridResolution - 1, _GridResolution - 1));
+    return cell;
+}
+
+uint CellHash(int3 cell)
+{
+    return (uint)(cell.x + cell.y * _GridResolution + cell.z * _GridResolution * _GridResolution);
+}
+
+float SafeLength(float3 v)
+{
+    return sqrt(max(dot(v, v), 1e-12));
+}
+
+float2 DiskSample(uint seedA, uint seedB, float radius)
+{
+    float r = sqrt(Random01(seedA)) * radius;
+    float a = Random01(seedB) * 6.28318530718;
+    return float2(cos(a), sin(a)) * r;
+}
+
+[numthreads(THREADS, 1, 1)]
+void EmitFromOutlet(uint3 id : SV_DispatchThreadID)
+{
+    uint n = id.x;
+    if (n >= (uint)_EmitCount || _ParticleCount <= 0)
+    {
+        return;
+    }
+
+    uint idx = ((uint)_EmissionCursor + n) % (uint)_ParticleCount;
+    uint seed = WangHash(idx + (uint)(abs(_RandomSeed) * 1000.0) + n * 747796405u);
+
+    float2 offset = float2(0.0, 0.0);
+
+    if (_OutletShape == 1) // Line
+    {
+        float alongLine = (Random01(seed + 1u) - 0.5) * _LineOutletLength;
+        float smallWidth = (Random01(seed + 2u) - 0.5) * _OutletRadius * 0.35;
+        offset = float2(alongLine, smallWidth);
+    }
+    else if (_OutletShape == 2) // MultipleHoles
+    {
+        int holeCount = max(2, _MultipleHoleCount);
+        int holeIndex = (int)floor(Random01(seed + 1u) * holeCount);
+        holeIndex = clamp(holeIndex, 0, holeCount - 1);
+        float centeredIndex = holeIndex - (holeCount - 1) * 0.5;
+        float2 disk = DiskSample(seed + 2u, seed + 3u, _OutletRadius * 0.30);
+        offset = float2(centeredIndex * _MultipleHoleSpacing + disk.x, disk.y);
+    }
+    else if (_OutletShape == 3) // Random
+    {
+        float2 disk = DiskSample(seed + 1u, seed + 2u, _OutletRadius);
+        float2 jitter = DiskSample(seed + 3u, seed + 4u, _OutletRadius * _ShapeJitter);
+        offset = disk + jitter * lerp(0.25, 1.0, Random01(seed + 5u));
+    }
+    else // Circle
+    {
+        offset = DiskSample(seed + 1u, seed + 2u, _OutletRadius);
+    }
+
+    float speedT = Random01(seed + 10u);
+    float speed = lerp(_OutletSpeedMin, _OutletSpeedMax, speedT);
+
+    float2 spreadDisk = DiskSample(seed + 11u, seed + 12u, _SpreadTan);
+    float3 spread = _OutletRight * spreadDisk.x + _OutletUp * spreadDisk.y;
+
+    float3 randomJitter = float3(
+        Random01(seed + 13u) - 0.5,
+        Random01(seed + 14u) - 0.5,
+        Random01(seed + 15u) - 0.5
+    ) * _RandomVelocityJitter;
+
+    Particle p;
+    p.position = _OutletPosition + _OutletRight * offset.x + _OutletUp * offset.y;
+    p.velocity = normalize(_OutletDirection + spread + randomJitter) * speed + _EmitterVelocity;
+    p.density = _RestDensity;
+    p.pressure = 0.0;
+    _Particles[idx] = p;
+}
+
+[numthreads(THREADS, 1, 1)]
+void ClearGrid(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= (uint)_CellsCount)
+    {
+        return;
+    }
+    _CellCounts[i] = 0;
+}
+
+[numthreads(THREADS, 1, 1)]
+void BuildGrid(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    Particle p = _Particles[i];
+    int3 cell = PositionToCell(p.position);
+    uint hash = CellHash(cell);
+
+    uint slot;
+    InterlockedAdd(_CellCounts[hash], 1, slot);
+
+    if (slot < (uint)_MaxParticlesPerCell)
+    {
+        _CellParticles[hash * (uint)_MaxParticlesPerCell + slot] = i;
+    }
+}
+
+[numthreads(THREADS, 1, 1)]
+void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    Particle pi = _Particles[i];
+    float h = max(_SmoothingRadius, 0.0001);
+    float h2 = h * h;
+    float h9 = h2 * h2 * h2 * h2 * h;
+    float poly6 = 315.0 / (64.0 * PI * max(h9, 1e-9));
+
+    float density = 0.0;
+    int3 baseCell = PositionToCell(pi.position);
+
+    [unroll]
+    for (int z = -1; z <= 1; z++)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; y++)
+        {
+            [unroll]
+            for (int x = -1; x <= 1; x++)
+            {
+                int3 cell = baseCell + int3(x, y, z);
+                if (any(cell < 0) || any(cell >= _GridResolution))
+                {
+                    continue;
+                }
+
+                uint hash = CellHash(cell);
+                uint count = min(_CellCounts[hash], (uint)_MaxParticlesPerCell);
+
+                for (uint n = 0; n < count; n++)
+                {
+                    uint j = _CellParticles[hash * (uint)_MaxParticlesPerCell + n];
+                    Particle pj = _Particles[j];
+                    float3 rij = pi.position - pj.position;
+                    float r2 = dot(rij, rij);
+                    if (r2 < h2)
+                    {
+                        float term = h2 - r2;
+                        density += _ParticleMass * poly6 * term * term * term;
+                    }
+                }
+            }
+        }
+    }
+
+    density = max(density, 0.0001);
+    pi.density = density;
+    pi.pressure = max(0.0, (density - _RestDensity) * _PressureStiffness);
+    _Particles[i] = pi;
+}
+
+[numthreads(THREADS, 1, 1)]
+void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    Particle pi = _Particles[i];
+    float h = max(_SmoothingRadius, 0.0001);
+    float h2 = h * h;
+    float h6 = h2 * h2 * h2;
+    float spikyGrad = 45.0 / (PI * max(h6, 1e-9));
+    float viscLap = 45.0 / (PI * max(h6, 1e-9));
+
+    float3 pressureForce = float3(0.0, 0.0, 0.0);
+    float3 viscosityForce = float3(0.0, 0.0, 0.0);
+    float3 cohesionForce = float3(0.0, 0.0, 0.0);
+    int3 baseCell = PositionToCell(pi.position);
+
+    [unroll]
+    for (int z = -1; z <= 1; z++)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; y++)
+        {
+            [unroll]
+            for (int x = -1; x <= 1; x++)
+            {
+                int3 cell = baseCell + int3(x, y, z);
+                if (any(cell < 0) || any(cell >= _GridResolution))
+                {
+                    continue;
+                }
+
+                uint hash = CellHash(cell);
+                uint count = min(_CellCounts[hash], (uint)_MaxParticlesPerCell);
+
+                for (uint n = 0; n < count; n++)
+                {
+                    uint j = _CellParticles[hash * (uint)_MaxParticlesPerCell + n];
+                    if (j == i)
+                    {
+                        continue;
+                    }
+
+                    Particle pj = _Particles[j];
+                    float3 rij = pi.position - pj.position;
+                    float r2 = dot(rij, rij);
+                    if (r2 > 1e-10 && r2 < h2)
+                    {
+                        float r = sqrt(r2);
+                        float3 dir = rij / r;
+                        float neighborDensity = max(pj.density, 0.0001);
+                        float hr = h - r;
+
+                        float pressureMagnitude =
+                            _ParticleMass *
+                            (pi.pressure + pj.pressure) /
+                            (2.0 * neighborDensity) *
+                            spikyGrad * hr * hr;
+
+                        pressureForce += -dir * pressureMagnitude;
+                        viscosityForce += _Viscosity * _ParticleMass * (pj.velocity - pi.velocity) / neighborDensity * viscLap * hr;
+                        cohesionForce += -dir * (_SurfaceTension * (hr / h) * (hr / h));
+                    }
+                }
+            }
+        }
+    }
+
+    float3 force = pressureForce + viscosityForce + cohesionForce;
+    float3 acceleration = force / max(pi.density, 0.0001);
+    acceleration += float3(0.0, -_Gravity, 0.0);
+    acceleration += -_Drag * pi.velocity;
+
+    float accLen = SafeLength(acceleration);
+    if (accLen > _MaxAcceleration)
+    {
+        acceleration *= _MaxAcceleration / accLen;
+    }
+
+    pi.velocity += acceleration * _DeltaTime;
+
+    float velLen = SafeLength(pi.velocity);
+    if (velLen > _MaxVelocity)
+    {
+        pi.velocity *= _MaxVelocity / velLen;
+    }
+
+    pi.position += pi.velocity * _DeltaTime;
+
+    float3 minBounds = _BoundsCenter - _HalfBoundsSize.xxx;
+    float3 maxBounds = _BoundsCenter + _HalfBoundsSize.xxx;
+
+    if (_CollideWithGround == 1)
+    {
+        minBounds.y = max(minBounds.y, _GroundY);
+    }
+
+    if (pi.position.x < minBounds.x)
+    {
+        pi.position.x = minBounds.x;
+        pi.velocity.x = abs(pi.velocity.x) * _BoundaryDamping;
+    }
+    else if (pi.position.x > maxBounds.x)
+    {
+        pi.position.x = maxBounds.x;
+        pi.velocity.x = -abs(pi.velocity.x) * _BoundaryDamping;
+    }
+
+    if (pi.position.y < minBounds.y)
+    {
+        pi.position.y = minBounds.y;
+        pi.velocity.y = abs(pi.velocity.y) * _BoundaryDamping;
+        pi.velocity.xz *= 0.985;
+    }
+    else if (pi.position.y > maxBounds.y)
+    {
+        pi.position.y = maxBounds.y;
+        pi.velocity.y = -abs(pi.velocity.y) * _BoundaryDamping;
+    }
+
+    if (pi.position.z < minBounds.z)
+    {
+        pi.position.z = minBounds.z;
+        pi.velocity.z = abs(pi.velocity.z) * _BoundaryDamping;
+    }
+    else if (pi.position.z > maxBounds.z)
+    {
+        pi.position.z = maxBounds.z;
+        pi.velocity.z = -abs(pi.velocity.z) * _BoundaryDamping;
+    }
+
+    _Particles[i] = pi;
+}
