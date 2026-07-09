@@ -287,22 +287,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 13109be87dc6ba049a3dd568eb485e26, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Assets.PaintCanvasDrawer
-  showRuntimeSettingsUI: 0
-  runtimeSettingsWindow:
-    serializedVersion: 2
-    x: 12
-    y: 700
-    width: 430
-    height: 650
-  runtimeShowCanvasSettings: 1
-  runtimeShowBrushSettings: 1
-  runtimeShowSurfaceSettings: 0
-  runtimeShowImpactSettings: 0
-  runtimeShowOptimizationSettings: 0
-  runtimeShowCorrectionSettings: 0
   textureWidth: 1024
   textureHeight: 1024
-  backgroundColor: {r: 0.55, g: 0.36, b: 0.19, a: 1}
+  backgroundColor: {r: 1, g: 1, b: 1, a: 1}
   clearOnStart: 1
   createMaterialInstance: 1
   useUnityPlaneLocalSize: 1
@@ -313,22 +300,6 @@ MonoBehaviour:
   splatterCount: 1
   splatterDistanceMultiplier: 1
   splatterSizeMultiplier: 0.28
-  surfaceMaterial: 1
-  applySurfacePresetAutomatically: 1
-  surfaceAbsorption: 0.55
-  surfaceSpreadMultiplier: 0.85
-  surfaceOpacityMultiplier: 0.68
-  surfaceStainDarkening: 0.22
-  surfaceEdgeSoftnessMultiplier: 0.85
-  surfaceSplatterAmountMultiplier: 0.55
-  surfaceSplatterDistanceMultiplier: 0.55
-  surfaceFiberNoiseStrength: 0.32
-  surfaceFiberNoiseScale: 0.06
-  surfaceColorTintStrength: 0.32
-  surfaceTintColor: {r: 0.62, g: 0.39, b: 0.2, a: 1}
-  woodGrainStrength: 0.78
-  woodGrainStretch: 2.45
-  woodGrainTextureDirection: {x: 1, y: 0}
   usePaintBudget: 1
   maxPaintStampsPerFrame: 30
   useDirtyRectUpload: 1
@@ -845,67 +816,7 @@ Transform:
   m_GameObject: {fileID: 927611738}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 47, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1100320194
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1100320196}
-  - component: {fileID: 1100320195}
-  m_Layer: 0
-  m_Name: Runtime Controller
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1100320195
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1100320194}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8642467cc1146da4ab3035ffd837cb26, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: '::'
-  sceneCamera: {fileID: 330585545}
-  orbitSpeed: 4
-  panSpeed: 0.01
-  zoomSpeed: 5
-  minZoom: 1
-  maxZoom: 80
-  selectableLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
-  selectedMaterial: {fileID: 2100000, guid: 08544bba621c02940a6ab1055854743d, type: 2}
-  rotateSpeed: 0.4
-  scaleSpeed: 0.01
-  keyboardMoveSpeed: 2
-  keyboardRotateSpeed: 90
-  keyboardScaleSpeed: 1
-  minScale: 0.05
---- !u!4 &1100320196
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1100320194}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.46215, y: 0, z: 1.071}
+  m_LocalPosition: {x: 0, y: 31.25, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -946,45 +857,11 @@ MonoBehaviour:
   ball: {fileID: 1539557225}
   ropeAxis1: {fileID: 1921812790}
   ropeAxis2: {fileID: 1864364833}
-  ropeVisual1: {fileID: 732542244}
-  ropeVisual2: {fileID: 732542244}
   length: 0.3
   dragCoeff: 0.1
   dt: 0.02
   mass: 10
   g: 9.81
-  stretchPower: 0.015
-  maxStretch: 1.18
-  stretchReturnSpeed: 0.08
-  twistPower: 15
-  showRuntimeInterface: 1
-  showMiniToggleButton: 1
-  showRuntimeStats: 1
-  showPhysicsSettings: 1
-  showRopeSettings: 1
-  showVisualSettings: 1
-  pausePhysicsFromUI: 0
-  pauseRopeVisualsFromUI: 0
-  enableVisualTwist: 1
-  enableVisualStretch: 1
-  showRopeVisual1: 1
-  showRopeVisual2: 1
-  runtimeWindowRect:
-    serializedVersion: 2
-    x: 500
-    y: 700
-    width: 390
-    height: 620
-  miniButtonRect:
-    serializedVersion: 2
-    x: 12
-    y: 12
-    width: 120
-    height: 32
-  runtimeUIScale: 1
-  uiBackgroundColor: {r: 0, g: 0, b: 0, a: 0.72}
-  uiTextColor: {r: 1, g: 1, b: 1, a: 1}
-  uiAccentColor: {r: 0.3, g: 0.8, b: 1, a: 1}
 --- !u!4 &1180384158
 Transform:
   m_ObjectHideFlags: 0
@@ -1051,9 +928,9 @@ MonoBehaviour:
   emitter: {fileID: 587900991}
   tiltReference: {fileID: 1539557225}
   renderCamera: {fileID: 330585545}
-  emissionAxis: 6
+  emissionAxis: 3
   emissionLocalOffset: {x: 0, y: 0, z: 0}
-  showOutletGizmo: 0
+  showOutletGizmo: 1
   outletGizmoLength: 0.35
   outletShape: 0
   outletShapeRadius: 0.035
@@ -1101,37 +978,18 @@ MonoBehaviour:
   liquidVisualSmoothing: 0
   emissionEnabled: 1
   maxParticles: 500000
-  emissionRate: 200000
+  emissionRate: 250000
   emitOnlyWhenTilted: 0
   tiltStartAngle: 25
   tiltFullAngle: 80
-  initialSpeedMin: 0.65
-  initialSpeedMax: 1.35
+  initialSpeedMin: 0.03
+  initialSpeedMax: 0.12
   spreadAngle: 2
   inheritEmitterVelocity: 0.074
-  sizeMin: 2
-  sizeMax: 4
+  sizeMin: 1
+  sizeMax: 2
   startColor: {r: 0.37254903, g: 0.37254903, b: 0.37254903, a: 1}
-  useRealisticFallingStream: 1
-  streamCoherence: 0.82
-  streamBreakup: 0.22
-  streamTurbulence: 0.16
-  flowPulseStrength: 0.1
-  flowPulseFrequency: 2.1
-  streamWobbleAngle: 1.15
-  streamWobbleFrequency: 1.35
-  gravityDirectionBlend: 0.18
-  streamSpeedMultiplier: 1.15
-  forceNarrowOutletSpread: 0.72
-  automaticJitterReduction: 0.78
-  useRainbowParticles: 1
-  useRainbowPaintOnCanvas: 1
-  rainbowSaturation: 1
-  rainbowValue: 1
-  rainbowParticleHueScale: 0.000015
-  rainbowPaintWorldScale: 0.22
-  rainbowScrollSpeed: 0.25
-  paintViscosity: 0.293
+  paintViscosity: 0.45
   useSPHSimulation: 1
   sphInfluence: 1
   sphSmoothingRadius: 0.16
@@ -1160,8 +1018,8 @@ MonoBehaviour:
   drag: 0.01
   fixedDtOverride: 0.004
   maxVelocity: 1.8
-  boundsSize: 100
-  boundsCenter: {x: 0, y: 9, z: 0}
+  boundsSize: 7.5
+  boundsCenter: {x: 0, y: 2.5, z: 0}
   boundaryDamping: 0.55
   gridResolution: 40
   maxParticlesPerCell: 96
@@ -1192,7 +1050,7 @@ MonoBehaviour:
   skipViewportCullingWhenManyParticles: 1
   viewportCullingDisableThreshold: 100000
   useSimulationBudget: 0
-  maxParticlesSimulatedPerFixedStep: 500013
+  maxParticlesSimulatedPerFixedStep: 500000
   autoTurboMode: 0
   turboParticleThreshold: 500000
   disableSPHInTurboMode: 0
@@ -1201,30 +1059,7 @@ MonoBehaviour:
   maxEmittedPerFixedStep: 500000
   renderParticleSize: 0.1
   drawParticles: 1
-  showStatsOnGUI: 0
-  showRuntimeSettingsUI: 0
-  runtimeSettingsCollapsed: 0
-  runtimeSettingsWindowRect:
-    serializedVersion: 2
-    x: 500
-    y: 12
-    width: 430
-    height: 640
-  runtimeSettingsWindowOpacity: 0.94
-  runtimeSettingsFontSize: 13
-  runtimeSettingsBackgroundColor: {r: 0.05, g: 0.05, b: 0.06, a: 0.94}
-  runtimeSettingsTextColor: {r: 1, g: 1, b: 1, a: 1}
-  runtimeSettingsAccentColor: {r: 1, g: 0.4117647, b: 0.7058824, a: 1}
-  uiShowQuickControls: 1
-  uiShowVisibleThings: 1
-  uiShowParticlesAndFlow: 1
-  uiShowOutletSettings: 1
-  uiShowRealisticStream: 1
-  uiShowSPHSettings: 1
-  uiShowRenderingSettings: 1
-  uiShowColorSettings: 1
-  uiShowWaterAndCanvas: 1
-  uiShowPerformanceSettings: 1
+  showStatsOnGUI: 1
 --- !u!114 &1225185329
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1256,7 +1091,7 @@ MonoBehaviour:
   surfaceClampPadding: 0.012
   drainTargetRadiusFactor: 0.72
   showInsideTracers: 1
-  tracerCount: 9052
+  tracerCount: 10240
   tracerSize: 0.003
   fallingTracerSize: 0.012
   idleVerticalSpeed: 0.035
@@ -1284,13 +1119,6 @@ MonoBehaviour:
   levelBarWidth: 0.035
   surfaceThickness: 0.018
   valueSmoothing: 0.18
-  useRainbowVisualColors: 1
-  rainbowSaturation: 1
-  rainbowValue: 1
-  rainbowAlpha: 0.92
-  rainbowScrollSpeed: 0.08
-  tracerRainbowSpread: 1.35
-  rainbowTextColor: 0
   tracerColor: {r: 0.15, g: 0.85, b: 1, a: 0.9}
   surfaceColor: {r: 0.1, g: 0.55, b: 1, a: 0.28}
   barBackColor: {r: 1, g: 1, b: 1, a: 0.18}
@@ -1298,20 +1126,6 @@ MonoBehaviour:
   arrowColor: {r: 0.1, g: 1, b: 0.65, a: 0.95}
   vortexColor: {r: 0.6, g: 0.95, b: 1, a: 0.62}
   textColor: {r: 1, g: 1, b: 1, a: 1}
-  showRuntimeSettingsUI: 0
-  runtimeSettingsPanelOpen: 1
-  runtimeSettingsWindowRect:
-    serializedVersion: 2
-    x: 14
-    y: 14
-    width: 430
-    height: 640
-  runtimeUiScale: 1
-  runtimeUiWidth: 430
-  runtimeUiHeight: 640
-  runtimeUiOpacity: 0.94
-  runtimeUiShowSourceReadout: 1
-  runtimeUiShowColorSettings: 0
 --- !u!1 &1328917493
 GameObject:
   m_ObjectHideFlags: 0
@@ -1598,7 +1412,7 @@ Transform:
   m_GameObject: {fileID: 1921812789}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.4, y: 48.3, z: -0.4}
+  m_LocalPosition: {x: -0.4, y: 41, z: -0.4}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -1724,4 +1538,3 @@ SceneRoots:
   - {fileID: 1921812790}
   - {fileID: 1225185326}
   - {fileID: 399870089}
-  - {fileID: 1100320196}

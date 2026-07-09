@@ -34,6 +34,8 @@ public class BucketFlowMonitor3D : MonoBehaviour
         public float radius01;
         public float speedMul;
         public float phase;
+        public float colorHue;
+        public MaterialPropertyBlock propertyBlock;
         public float line01;
         public int holeIndex;
         public Vector2 randomBias;
@@ -126,6 +128,17 @@ public class BucketFlowMonitor3D : MonoBehaviour
     [SerializeField, Range(0.01f, 0.8f)] private float valueSmoothing = 0.18f;
 
     [Header("Colors")]
+    [SerializeField] private bool useRainbowVisualColors = true;
+    [SerializeField, Range(0f, 1f)] private float rainbowSaturation = 1f;
+    [SerializeField, Range(0f, 1f)] private float rainbowValue = 1f;
+    [SerializeField, Range(0f, 1f)] private float rainbowAlpha = 0.92f;
+    [SerializeField, Range(0f, 2f)] private float rainbowScrollSpeed = 0.08f;
+    [Tooltip("Higher value means the tracer colors change more across height/radius instead of all shifting together.")]
+    [SerializeField, Range(0f, 3f)] private float tracerRainbowSpread = 1.35f;
+    [Tooltip("Keep OFF for readable text. Turn ON if you also want the text color to animate.")]
+    [SerializeField] private bool rainbowTextColor = false;
+
+    [Header("Fallback Colors - Used when Rainbow is OFF")]
     [SerializeField] private Color tracerColor = new Color(0.15f, 0.85f, 1f, 0.9f);
     [SerializeField] private Color surfaceColor = new Color(0.1f, 0.55f, 1f, 0.28f);
     [SerializeField] private Color barBackColor = new Color(1f, 1f, 1f, 0.18f);
@@ -133,6 +146,18 @@ public class BucketFlowMonitor3D : MonoBehaviour
     [SerializeField] private Color arrowColor = new Color(0.1f, 1f, 0.65f, 0.95f);
     [SerializeField] private Color vortexColor = new Color(0.6f, 0.95f, 1f, 0.62f);
     [SerializeField] private Color textColor = Color.white;
+
+
+    [Header("Runtime Settings UI")]
+    [SerializeField] private bool showRuntimeSettingsUI = true;
+    [SerializeField] private bool runtimeSettingsPanelOpen = true;
+    [SerializeField] private Rect runtimeSettingsWindowRect = new Rect(14f, 14f, 430f, 640f);
+    [SerializeField, Range(0.75f, 1.6f)] private float runtimeUiScale = 1f;
+    [SerializeField, Range(280f, 680f)] private float runtimeUiWidth = 430f;
+    [SerializeField, Range(260f, 820f)] private float runtimeUiHeight = 640f;
+    [SerializeField, Range(0.15f, 1f)] private float runtimeUiOpacity = 0.94f;
+    [SerializeField] private bool runtimeUiShowSourceReadout = true;
+    [SerializeField] private bool runtimeUiShowColorSettings = false;
 
     private Transform visualRoot;
     private Transform levelSurface;
@@ -160,10 +185,20 @@ public class BucketFlowMonitor3D : MonoBehaviour
     private float displayedDecreasePerSecond;
     private float previousWaterAmount;
     private bool previousWaterAmountReady;
+    private Vector2 runtimeSettingsScroll;
+    private bool runtimeUiRebuildRequested;
+    private bool runtimeUiStylesReady;
+    private GUIStyle runtimeUiHeaderStyle;
+    private GUIStyle runtimeUiSectionStyle;
+    private GUIStyle runtimeUiMiniLabelStyle;
+
     private int builtTracerCount = -1;
     private int builtMaxPreviewPaths = -1;
 
+    private const int RuntimeSettingsWindowId = 342971;
     private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+    private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
+    private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
     private readonly Dictionary<string, FieldInfo> sourceFieldCache = new Dictionary<string, FieldInfo>();
 
     private void Reset()
@@ -188,8 +223,9 @@ public class BucketFlowMonitor3D : MonoBehaviour
     {
         ResolveReferences();
 
-        if (visualRoot == null || builtTracerCount != tracerCount || builtMaxPreviewPaths != maxPreviewPaths)
+        if (visualRoot == null || runtimeUiRebuildRequested || builtTracerCount != tracerCount || builtMaxPreviewPaths != maxPreviewPaths)
         {
+            runtimeUiRebuildRequested = false;
             BuildVisuals();
         }
 
@@ -232,7 +268,7 @@ public class BucketFlowMonitor3D : MonoBehaviour
 
         if (source == null)
         {
-            source = FindObjectOfType<BucketParticleSystemCustom>();
+            source = FindFirstObjectByType<BucketParticleSystemCustom>();
         }
 
         if (bucketRoot == null)
@@ -348,6 +384,8 @@ public class BucketFlowMonitor3D : MonoBehaviour
                 radius01 = Mathf.Sqrt(UnityEngine.Random.Range(0.02f, 1f)) * 0.92f,
                 speedMul = UnityEngine.Random.Range(0.75f, 1.45f),
                 phase = UnityEngine.Random.Range(0f, Mathf.PI * 2f),
+                colorHue = UnityEngine.Random.value,
+                propertyBlock = new MaterialPropertyBlock(),
                 line01 = UnityEngine.Random.value,
                 holeIndex = UnityEngine.Random.Range(0, 12),
                 randomBias = UnityEngine.Random.insideUnitCircle
@@ -415,6 +453,7 @@ public class BucketFlowMonitor3D : MonoBehaviour
         levelSurface.localPosition = new Vector3(0f, y, 0f);
         levelSurface.localRotation = Quaternion.identity;
         levelSurface.localScale = new Vector3(radius * 2f, surfaceThickness * 0.5f, radius * 2f);
+        ApplyRendererColor(levelSurface.GetComponent<Renderer>(), GetSurfaceVisualColor(water01));
     }
 
     private void UpdateLevelBar(float water01)
@@ -440,6 +479,9 @@ public class BucketFlowMonitor3D : MonoBehaviour
         levelBarFill.localPosition = levelBarLocalPosition + Vector3.down * (levelBarHeight - fillHeight) * 0.5f;
         levelBarFill.localRotation = Quaternion.identity;
         levelBarFill.localScale = new Vector3(levelBarWidth * 1.25f, fillHeight, levelBarWidth * 1.25f);
+
+        ApplyRendererColor(levelBarBack.GetComponent<Renderer>(), useRainbowVisualColors ? WithAlpha(Color.white, barBackColor.a) : barBackColor);
+        ApplyRendererColor(levelBarFill.GetComponent<Renderer>(), GetBarFillVisualColor(water01));
     }
 
     private void UpdateFlowArrow(float water01, float flowRate, OutletRuntimeInfo outlet)
@@ -483,6 +525,8 @@ public class BucketFlowMonitor3D : MonoBehaviour
         arrowLine.SetPosition(1, end);
         arrowLine.startWidth = Mathf.Lerp(0.008f, 0.023f, flow01);
         arrowLine.endWidth = Mathf.Lerp(0.006f, 0.017f, flow01);
+        Color flowColor = GetFlowVisualColor(flow01);
+        ApplyLineColor(arrowLine, flowColor, flowColor);
 
         Vector3 back = (start - end).sqrMagnitude > 0.0001f ? (start - end).normalized : -outletDir;
         float headSize = Mathf.Lerp(0.045f, 0.10f, flow01);
@@ -497,6 +541,8 @@ public class BucketFlowMonitor3D : MonoBehaviour
         arrowHeadA.SetPosition(1, headA);
         arrowHeadB.SetPosition(0, end);
         arrowHeadB.SetPosition(1, headB);
+        ApplyLineColor(arrowHeadA, flowColor, flowColor);
+        ApplyLineColor(arrowHeadB, flowColor, flowColor);
     }
 
     private void UpdateOutletPreviewPaths(float water01, float flowRate, OutletRuntimeInfo outlet)
@@ -548,6 +594,9 @@ public class BucketFlowMonitor3D : MonoBehaviour
             float width = previewPathWidth * Mathf.Lerp(0.7f, 1.7f, flow01);
             line.startWidth = width;
             line.endWidth = width * 0.55f;
+            Color pathStart = useRainbowVisualColors ? GetRainbowOrFallback(0.08f + i * 0.09f + flow01 * 0.18f, arrowColor.a) : arrowColor;
+            Color pathEnd = useRainbowVisualColors ? GetRainbowOrFallback(0.48f + i * 0.09f + flow01 * 0.18f, arrowColor.a * 0.55f) : WithAlpha(arrowColor, arrowColor.a * 0.55f);
+            ApplyLineColor(line, pathStart, pathEnd);
         }
     }
 
@@ -594,6 +643,9 @@ public class BucketFlowMonitor3D : MonoBehaviour
         float width = vortexPathWidth * Mathf.Lerp(0.65f, 1.35f, flow01);
         vortexLine.startWidth = width;
         vortexLine.endWidth = width * 0.42f;
+        Color vortexStart = useRainbowVisualColors ? GetRainbowOrFallback(0.68f + flow01 * 0.16f, vortexColor.a) : vortexColor;
+        Color vortexEnd = useRainbowVisualColors ? GetRainbowOrFallback(0.92f + flow01 * 0.16f, vortexColor.a * 0.45f) : WithAlpha(vortexColor, vortexColor.a * 0.45f);
+        ApplyLineColor(vortexLine, vortexStart, vortexEnd);
     }
 
     private void UpdateTracers(float dt, float water01, float flowRate, OutletRuntimeInfo outlet)
@@ -659,6 +711,9 @@ public class BucketFlowMonitor3D : MonoBehaviour
             float fallingParticleSize = Mathf.Lerp(fallingTracerSize * 0.78f, fallingTracerSize * 1.42f, flow01);
             float falling01 = Mathf.Clamp01(funnel);
             state.transform.localScale = Vector3.one * Mathf.Lerp(normalParticleSize, fallingParticleSize, falling01);
+
+            Color tracerVisualColor = GetTracerVisualColor(state, flow01, falling01);
+            ApplyTracerColor(state, tracerVisualColor);
         }
     }
 
@@ -689,6 +744,7 @@ public class BucketFlowMonitor3D : MonoBehaviour
         state.radius01 = Mathf.Sqrt(UnityEngine.Random.Range(0.02f, 1f)) * 0.92f;
         state.speedMul = UnityEngine.Random.Range(0.75f, 1.45f);
         state.phase = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+        state.colorHue = Mathf.Repeat(state.colorHue + UnityEngine.Random.Range(0.11f, 0.37f), 1f);
         state.line01 = UnityEngine.Random.value;
         state.holeIndex = UnityEngine.Random.Range(0, 12);
         state.randomBias = UnityEngine.Random.insideUnitCircle;
@@ -714,7 +770,7 @@ public class BucketFlowMonitor3D : MonoBehaviour
             "Drop: " + decreasePerSecond.ToString("0.00") + " water/s\n" +
             "Outlet: " + outlet.shapeName;
 
-        infoText.color = textColor;
+        infoText.color = GetTextVisualColor();
         infoText.transform.localPosition = textLocalPosition;
 
         if (renderCamera != null)
@@ -1078,6 +1134,134 @@ public class BucketFlowMonitor3D : MonoBehaviour
         return localDirection.sqrMagnitude > 0.0001f ? localDirection.normalized : fallback;
     }
 
+    private Color GetRainbowOrFallback(float hueOffset, float alpha)
+    {
+        if (!useRainbowVisualColors)
+        {
+            Color fallback = Color.white;
+            fallback.a = alpha;
+            return fallback;
+        }
+
+        float hue = Mathf.Repeat(hueOffset + Time.time * rainbowScrollSpeed, 1f);
+        Color color = Color.HSVToRGB(hue, Mathf.Clamp01(rainbowSaturation), Mathf.Clamp01(rainbowValue));
+        color.a = Mathf.Clamp01(alpha * rainbowAlpha);
+        return color;
+    }
+
+    private Color GetSurfaceVisualColor(float water01)
+    {
+        if (!useRainbowVisualColors)
+        {
+            return surfaceColor;
+        }
+
+        return GetRainbowOrFallback(0.52f + water01 * 0.18f, surfaceColor.a);
+    }
+
+    private Color GetBarFillVisualColor(float water01)
+    {
+        if (!useRainbowVisualColors)
+        {
+            return barFillColor;
+        }
+
+        return GetRainbowOrFallback(0.30f + water01 * 0.45f, barFillColor.a);
+    }
+
+    private Color GetFlowVisualColor(float flow01)
+    {
+        if (!useRainbowVisualColors)
+        {
+            return arrowColor;
+        }
+
+        return GetRainbowOrFallback(0.12f + flow01 * 0.35f, arrowColor.a);
+    }
+
+    private Color GetTracerVisualColor(TracerState state, float flow01, float falling01)
+    {
+        if (!useRainbowVisualColors || state == null)
+        {
+            return tracerColor;
+        }
+
+        float heightShift = state.y01 * 0.22f * tracerRainbowSpread;
+        float motionShift = flow01 * 0.16f + falling01 * 0.08f;
+        return GetRainbowOrFallback(state.colorHue + heightShift + motionShift, tracerColor.a);
+    }
+
+    private Color GetTextVisualColor()
+    {
+        if (!useRainbowVisualColors || !rainbowTextColor)
+        {
+            return textColor;
+        }
+
+        return GetRainbowOrFallback(0.0f, textColor.a);
+    }
+
+    private Color WithAlpha(Color color, float alpha)
+    {
+        color.a = alpha;
+        return color;
+    }
+
+    private void ApplyRendererColor(Renderer targetRenderer, Color color)
+    {
+        if (targetRenderer == null)
+        {
+            return;
+        }
+
+        MaterialPropertyBlock block = new MaterialPropertyBlock();
+        targetRenderer.GetPropertyBlock(block);
+        block.SetColor(BaseColorPropertyId, color);
+        block.SetColor(ColorPropertyId, color);
+        targetRenderer.SetPropertyBlock(block);
+    }
+
+    private void ApplyTracerColor(TracerState state, Color color)
+    {
+        if (state == null || state.renderer == null)
+        {
+            return;
+        }
+
+        if (state.propertyBlock == null)
+        {
+            state.propertyBlock = new MaterialPropertyBlock();
+        }
+
+        state.renderer.GetPropertyBlock(state.propertyBlock);
+        state.propertyBlock.SetColor(BaseColorPropertyId, color);
+        state.propertyBlock.SetColor(ColorPropertyId, color);
+        state.renderer.SetPropertyBlock(state.propertyBlock);
+    }
+
+    private void ApplyLineColor(LineRenderer line, Color startColorValue, Color endColorValue)
+    {
+        if (line == null)
+        {
+            return;
+        }
+
+        line.startColor = startColorValue;
+        line.endColor = endColorValue;
+
+        if (line.material != null)
+        {
+            if (line.material.HasProperty(BaseColorPropertyId))
+            {
+                line.material.SetColor(BaseColorPropertyId, startColorValue);
+            }
+            if (line.material.HasProperty(ColorPropertyId))
+            {
+                line.material.SetColor(ColorPropertyId, startColorValue);
+            }
+        }
+    }
+
     private Material CreateMaterial(string materialName, Color color, bool transparent)
     {
         Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
@@ -1111,6 +1295,406 @@ public class BucketFlowMonitor3D : MonoBehaviour
         }
 
         return mat;
+    }
+
+
+    private void OnGUI()
+    {
+        if (!showRuntimeSettingsUI)
+        {
+            return;
+        }
+
+        EnsureRuntimeUiStyles();
+
+        float scaledWidth = Mathf.Clamp(runtimeUiWidth * runtimeUiScale, 250f, Mathf.Max(260f, Screen.width - 20f));
+        float scaledHeight = Mathf.Clamp(runtimeUiHeight * runtimeUiScale, 220f, Mathf.Max(230f, Screen.height - 20f));
+
+        if (runtimeSettingsWindowRect.width <= 10f || runtimeSettingsWindowRect.height <= 10f)
+        {
+            runtimeSettingsWindowRect = new Rect(14f, 14f, scaledWidth, scaledHeight);
+        }
+
+        runtimeSettingsWindowRect.width = scaledWidth;
+        runtimeSettingsWindowRect.height = scaledHeight;
+        runtimeSettingsWindowRect.x = Mathf.Clamp(runtimeSettingsWindowRect.x, 0f, Mathf.Max(0f, Screen.width - runtimeSettingsWindowRect.width));
+        runtimeSettingsWindowRect.y = Mathf.Clamp(runtimeSettingsWindowRect.y, 0f, Mathf.Max(0f, Screen.height - runtimeSettingsWindowRect.height));
+
+        Color oldColor = GUI.color;
+        Color oldBackground = GUI.backgroundColor;
+        GUI.color = new Color(1f, 1f, 1f, runtimeUiOpacity);
+        GUI.backgroundColor = new Color(0.08f, 0.12f, 0.16f, runtimeUiOpacity);
+
+        if (!runtimeSettingsPanelOpen)
+        {
+            Rect buttonRect = new Rect(runtimeSettingsWindowRect.x, runtimeSettingsWindowRect.y, 180f * runtimeUiScale, 34f * runtimeUiScale);
+            if (GUI.Button(buttonRect, "Flow Monitor Settings"))
+            {
+                runtimeSettingsPanelOpen = true;
+            }
+
+            GUI.color = oldColor;
+            GUI.backgroundColor = oldBackground;
+            return;
+        }
+
+        runtimeSettingsWindowRect = GUI.Window(RuntimeSettingsWindowId, runtimeSettingsWindowRect, DrawRuntimeSettingsWindow, "Bucket Flow Monitor 3D");
+
+        GUI.color = oldColor;
+        GUI.backgroundColor = oldBackground;
+    }
+
+    private void EnsureRuntimeUiStyles()
+    {
+        if (runtimeUiStylesReady && runtimeUiHeaderStyle != null)
+        {
+            return;
+        }
+
+        runtimeUiHeaderStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold,
+            fontSize = Mathf.RoundToInt(15 * runtimeUiScale),
+            alignment = TextAnchor.MiddleLeft
+        };
+
+        runtimeUiSectionStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontStyle = FontStyle.Bold,
+            fontSize = Mathf.RoundToInt(13 * runtimeUiScale),
+            normal = { textColor = new Color(0.65f, 0.92f, 1f, 1f) }
+        };
+
+        runtimeUiMiniLabelStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = Mathf.RoundToInt(11 * runtimeUiScale),
+            wordWrap = true,
+            normal = { textColor = new Color(0.88f, 0.94f, 1f, 1f) }
+        };
+
+        runtimeUiStylesReady = true;
+    }
+
+    private void DrawRuntimeSettingsWindow(int windowId)
+    {
+        GUILayout.BeginVertical();
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Runtime visual settings", runtimeUiHeaderStyle);
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("Hide", GUILayout.Width(58f)))
+        {
+            runtimeSettingsPanelOpen = false;
+        }
+        GUILayout.EndHorizontal();
+
+        runtimeSettingsScroll = GUILayout.BeginScrollView(runtimeSettingsScroll);
+
+        if (runtimeUiShowSourceReadout)
+        {
+            DrawRuntimeReadoutSection();
+        }
+
+        DrawRuntimeMainVisualsSection();
+        DrawRuntimeTracerSection();
+        DrawRuntimeOutletSection();
+        DrawRuntimeLevelTextSection();
+        DrawRuntimeBucketSafetySection();
+        DrawRuntimeColorSection();
+        DrawRuntimeUiSection();
+        DrawRuntimeActionsSection();
+
+        GUILayout.EndScrollView();
+        GUILayout.EndVertical();
+
+        GUI.DragWindow(new Rect(0f, 0f, 10000f, 24f));
+    }
+
+    private void DrawRuntimeReadoutSection()
+    {
+        GUILayout.Space(4f);
+        GUILayout.Label("Live Readout", runtimeUiSectionStyle);
+
+        float water01 = source != null ? source.CurrentWater01 : displayedWater01;
+        float currentWater = source != null ? source.CurrentWaterAmount : displayedWater01;
+        float initialWater = source != null ? source.InitialWaterAmount : 1f;
+        float flowRate = source != null ? source.CurrentFlowRate : displayedFlowRate;
+        OutletRuntimeInfo outlet = GetOutletRuntimeInfo();
+
+        GUILayout.Label(
+            "Water: " + (water01 * 100f).ToString("0") + "%  |  Amount: " + currentWater.ToString("0.0") + "/" + Mathf.Max(0f, initialWater).ToString("0.0") +
+            "\nFlow: " + flowRate.ToString("0") + " particles/s  |  Drop: " + displayedDecreasePerSecond.ToString("0.00") + " water/s" +
+            "\nOutlet: " + outlet.shapeName + "  |  Tracers: " + tracerCount,
+            runtimeUiMiniLabelStyle
+        );
+    }
+
+    private void DrawRuntimeMainVisualsSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Visible Elements", runtimeUiSectionStyle);
+
+        showInsideTracers = DrawToggleSetting("Inside helical tracer dots", showInsideTracers, true);
+        showOutletAwarePaths = DrawToggleSetting("Outlet-aware flow paths", showOutletAwarePaths, true);
+        showVortexPath = DrawToggleSetting("Internal vortex spiral path", showVortexPath, true);
+        showLevelSurface = DrawToggleSetting("Water level surface", showLevelSurface, true);
+        showLevelBar = DrawToggleSetting("Water level bar", showLevelBar, true);
+        showFlowArrow = DrawToggleSetting("Flow arrow", showFlowArrow, true);
+        showText = DrawToggleSetting("3D info text", showText, true);
+        keepFlowVisualsInsideBucket = DrawToggleSetting("Keep all visuals inside bucket", keepFlowVisualsInsideBucket, false);
+    }
+
+    private void DrawRuntimeTracerSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Inside Tracer Motion", runtimeUiSectionStyle);
+
+        int newTracerCount = DrawIntSliderSetting("Tracer Count", tracerCount, 0, 70000);
+        if (newTracerCount != tracerCount)
+        {
+            tracerCount = newTracerCount;
+            RequestRuntimeVisualRebuild();
+        }
+
+        tracerSize = DrawFloatSliderSetting("Tracer Size", tracerSize, 0.001f, 0.08f, "0.000");
+        fallingTracerSize = DrawFloatSliderSetting("Falling Tracer Size", fallingTracerSize, 0.001f, 0.08f, "0.000");
+        idleVerticalSpeed = DrawFloatSliderSetting("Idle Vertical Speed", idleVerticalSpeed, 0f, 0.35f, "0.000");
+        flowVerticalSpeed = DrawFloatSliderSetting("Flow Vertical Speed", flowVerticalSpeed, 0f, 3f, "0.00");
+        swirlSpeed = DrawFloatSliderSetting("Swirl Speed", swirlSpeed, 0f, 12f, "0.00");
+        vortexStrength = DrawFloatSliderSetting("Vortex Strength", vortexStrength, 0f, 4f, "0.00");
+        drainPullStrength = DrawFloatSliderSetting("Drain Pull Strength", drainPullStrength, 0f, 4f, "0.00");
+        turbulenceAmount = DrawFloatSliderSetting("Turbulence Amount", turbulenceAmount, 0f, 1f, "0.00");
+        vortexCoreRadius = DrawFloatSliderSetting("Vortex Core Radius", vortexCoreRadius, 0.05f, 1f, "0.00");
+        flowRateForFullMotion = DrawFloatSliderSetting("Flow Rate For Full Motion", flowRateForFullMotion, 1f, 120000f, "0");
+    }
+
+    private void DrawRuntimeOutletSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Outlet / Path Preview", runtimeUiSectionStyle);
+
+        autoReadOutletFromSource = DrawToggleSetting("Auto read outlet from source", autoReadOutletFromSource, false);
+        useSourceEmissionOffset = DrawToggleSetting("Use source emission offset", useSourceEmissionOffset, false);
+        useSourceEmissionDirection = DrawToggleSetting("Use source emission direction", useSourceEmissionDirection, false);
+
+        visualOutletShape = DrawOutletShapePopup("Visual Outlet Shape", visualOutletShape);
+        outletLocalDirection = DrawVector3Setting("Manual Outlet Direction", outletLocalDirection, -1f, 1f);
+
+        int newPreviewPaths = DrawIntSliderSetting("Max Preview Paths", maxPreviewPaths, 1, 12);
+        if (newPreviewPaths != maxPreviewPaths)
+        {
+            maxPreviewPaths = newPreviewPaths;
+            RequestRuntimeVisualRebuild();
+        }
+
+        previewPathWidth = DrawFloatSliderSetting("Preview Path Width", previewPathWidth, 0.001f, 0.04f, "0.000");
+        outletPreviewScale = DrawFloatSliderSetting("Outlet Preview Scale", outletPreviewScale, 0.1f, 3f, "0.00");
+        vortexPathWidth = DrawFloatSliderSetting("Vortex Path Width", vortexPathWidth, 0.001f, 0.04f, "0.000");
+        vortexTurns = DrawFloatSliderSetting("Vortex Turns", vortexTurns, 1f, 7f, "0.00");
+    }
+
+    private void DrawRuntimeLevelTextSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Level Bar / Text", runtimeUiSectionStyle);
+
+        levelBarLocalPosition = DrawVector3Setting("Level Bar Local Position", levelBarLocalPosition, -2f, 2f);
+        textLocalPosition = DrawVector3Setting("Text Local Position", textLocalPosition, -2f, 2f);
+        levelBarHeight = DrawFloatSliderSetting("Level Bar Height", levelBarHeight, 0.05f, 2f, "0.00");
+        levelBarWidth = DrawFloatSliderSetting("Level Bar Width", levelBarWidth, 0.005f, 0.16f, "0.000");
+        surfaceThickness = DrawFloatSliderSetting("Surface Thickness", surfaceThickness, 0.001f, 0.08f, "0.000");
+        valueSmoothing = DrawFloatSliderSetting("Value Smoothing", valueSmoothing, 0.01f, 0.8f, "0.00");
+    }
+
+    private void DrawRuntimeBucketSafetySection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Bucket Shape / Clamp", runtimeUiSectionStyle);
+
+        localCenterOffset = DrawVector3Setting("Local Center Offset", localCenterOffset, -1.5f, 1.5f);
+        bucketBottomY = DrawFloatSliderSetting("Bucket Bottom Y", bucketBottomY, -2f, 1f, "0.00");
+        bucketTopY = DrawFloatSliderSetting("Bucket Top Y", bucketTopY, bucketBottomY + 0.001f, 2.5f, "0.00");
+        bottomRadius = DrawFloatSliderSetting("Bottom Radius", bottomRadius, 0.01f, 1.5f, "0.00");
+        topRadius = DrawFloatSliderSetting("Top Radius", topRadius, 0.01f, 2.0f, "0.00");
+        insideWallPaddingMultiplier = DrawFloatSliderSetting("Inside Wall Padding", insideWallPaddingMultiplier, 0.55f, 0.99f, "0.00");
+        bottomClampPadding = DrawFloatSliderSetting("Bottom Clamp Padding", bottomClampPadding, 0f, 0.15f, "0.000");
+        surfaceClampPadding = DrawFloatSliderSetting("Surface Clamp Padding", surfaceClampPadding, 0f, 0.15f, "0.000");
+        drainTargetRadiusFactor = DrawFloatSliderSetting("Drain Target Radius Factor", drainTargetRadiusFactor, 0.15f, 0.95f, "0.00");
+    }
+
+    private void DrawRuntimeColorSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Colors", runtimeUiSectionStyle);
+
+        useRainbowVisualColors = DrawToggleSetting("Use Rainbow Visual Colors", useRainbowVisualColors, false);
+        rainbowTextColor = DrawToggleSetting("Rainbow Text Color", rainbowTextColor, false);
+        rainbowSaturation = DrawFloatSliderSetting("Rainbow Saturation", rainbowSaturation, 0f, 1f, "0.00");
+        rainbowValue = DrawFloatSliderSetting("Rainbow Value", rainbowValue, 0f, 1f, "0.00");
+        rainbowAlpha = DrawFloatSliderSetting("Rainbow Alpha", rainbowAlpha, 0f, 1f, "0.00");
+        rainbowScrollSpeed = DrawFloatSliderSetting("Rainbow Scroll Speed", rainbowScrollSpeed, 0f, 2f, "0.00");
+        tracerRainbowSpread = DrawFloatSliderSetting("Tracer Rainbow Spread", tracerRainbowSpread, 0f, 3f, "0.00");
+
+        runtimeUiShowColorSettings = DrawToggleSetting("Show fallback RGBA color sliders", runtimeUiShowColorSettings, false);
+        if (runtimeUiShowColorSettings)
+        {
+            tracerColor = DrawColorSetting("Tracer Color", tracerColor);
+            surfaceColor = DrawColorSetting("Surface Color", surfaceColor);
+            barBackColor = DrawColorSetting("Bar Back Color", barBackColor);
+            barFillColor = DrawColorSetting("Bar Fill Color", barFillColor);
+            arrowColor = DrawColorSetting("Arrow / Paths Color", arrowColor);
+            vortexColor = DrawColorSetting("Vortex Color", vortexColor);
+            textColor = DrawColorSetting("Text Color", textColor);
+        }
+    }
+
+    private void DrawRuntimeUiSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Panel UI", runtimeUiSectionStyle);
+
+        runtimeUiShowSourceReadout = DrawToggleSetting("Show live readout", runtimeUiShowSourceReadout, false);
+
+        float oldScale = runtimeUiScale;
+        runtimeUiScale = DrawFloatSliderSetting("Panel Scale", runtimeUiScale, 0.75f, 1.6f, "0.00");
+        if (!Mathf.Approximately(oldScale, runtimeUiScale))
+        {
+            runtimeUiStylesReady = false;
+        }
+
+        runtimeUiWidth = DrawFloatSliderSetting("Panel Width", runtimeUiWidth, 280f, 680f, "0");
+        runtimeUiHeight = DrawFloatSliderSetting("Panel Height", runtimeUiHeight, 260f, 820f, "0");
+        runtimeUiOpacity = DrawFloatSliderSetting("Panel Opacity", runtimeUiOpacity, 0.15f, 1f, "0.00");
+    }
+
+    private void DrawRuntimeActionsSection()
+    {
+        GUILayout.Space(8f);
+        GUILayout.Label("Actions", runtimeUiSectionStyle);
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Rebuild Visuals"))
+        {
+            RequestRuntimeVisualRebuild();
+        }
+
+        if (GUILayout.Button("Reset Tracers"))
+        {
+            for (int i = 0; i < tracers.Count; i++)
+            {
+                RespawnTracer(tracers[i]);
+            }
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Hide All"))
+        {
+            showInsideTracers = false;
+            showOutletAwarePaths = false;
+            showVortexPath = false;
+            showLevelSurface = false;
+            showLevelBar = false;
+            showFlowArrow = false;
+            showText = false;
+            RequestRuntimeVisualRebuild();
+        }
+
+        if (GUILayout.Button("Show All"))
+        {
+            showInsideTracers = true;
+            showOutletAwarePaths = true;
+            showVortexPath = true;
+            showLevelSurface = true;
+            showLevelBar = true;
+            showFlowArrow = true;
+            showText = true;
+            RequestRuntimeVisualRebuild();
+        }
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label("The panel changes only this visual monitor. It does not change the GPU SPH simulation itself.", runtimeUiMiniLabelStyle);
+    }
+
+    private bool DrawToggleSetting(string label, bool value, bool rebuildVisuals)
+    {
+        bool newValue = GUILayout.Toggle(value, label);
+        if (newValue != value && rebuildVisuals)
+        {
+            RequestRuntimeVisualRebuild();
+        }
+        return newValue;
+    }
+
+    private float DrawFloatSliderSetting(string label, float value, float min, float max, string format)
+    {
+        min = Mathf.Min(min, max);
+        max = Mathf.Max(min, max);
+        GUILayout.Label(label + ": " + value.ToString(format), runtimeUiMiniLabelStyle);
+        return GUILayout.HorizontalSlider(value, min, max);
+    }
+
+    private int DrawIntSliderSetting(string label, int value, int min, int max)
+    {
+        GUILayout.Label(label + ": " + value.ToString(), runtimeUiMiniLabelStyle);
+        return Mathf.RoundToInt(GUILayout.HorizontalSlider(value, min, max));
+    }
+
+    private Vector3 DrawVector3Setting(string label, Vector3 value, float min, float max)
+    {
+        GUILayout.Label(label + ": " + value.ToString("F2"), runtimeUiMiniLabelStyle);
+        value.x = DrawFloatSliderSetting("  X", value.x, min, max, "0.00");
+        value.y = DrawFloatSliderSetting("  Y", value.y, min, max, "0.00");
+        value.z = DrawFloatSliderSetting("  Z", value.z, min, max, "0.00");
+        return value;
+    }
+
+    private Color DrawColorSetting(string label, Color color)
+    {
+        GUILayout.Space(4f);
+        GUILayout.Label(label + "  RGBA: " + color.ToString(), runtimeUiMiniLabelStyle);
+        color.r = DrawFloatSliderSetting("  R", color.r, 0f, 1f, "0.00");
+        color.g = DrawFloatSliderSetting("  G", color.g, 0f, 1f, "0.00");
+        color.b = DrawFloatSliderSetting("  B", color.b, 0f, 1f, "0.00");
+        color.a = DrawFloatSliderSetting("  A", color.a, 0f, 1f, "0.00");
+        return color;
+    }
+
+    private VisualOutletShape DrawOutletShapePopup(string label, VisualOutletShape value)
+    {
+        GUILayout.Label(label + ": " + value, runtimeUiMiniLabelStyle);
+        GUILayout.BeginHorizontal();
+
+        if (GUILayout.Button("Auto"))
+        {
+            value = VisualOutletShape.AutoFromSource;
+        }
+        if (GUILayout.Button("Circle"))
+        {
+            value = VisualOutletShape.Circle;
+        }
+        if (GUILayout.Button("Line"))
+        {
+            value = VisualOutletShape.Line;
+        }
+        if (GUILayout.Button("Holes"))
+        {
+            value = VisualOutletShape.MultipleHoles;
+        }
+        if (GUILayout.Button("Random"))
+        {
+            value = VisualOutletShape.Random;
+        }
+
+        GUILayout.EndHorizontal();
+        return value;
+    }
+
+    private void RequestRuntimeVisualRebuild()
+    {
+        runtimeUiRebuildRequested = true;
+        builtTracerCount = -1;
+        builtMaxPreviewPaths = -1;
     }
 
     private void ClearVisuals()
@@ -1159,5 +1743,14 @@ public class BucketFlowMonitor3D : MonoBehaviour
         surfaceClampPadding = Mathf.Clamp(surfaceClampPadding, 0f, 0.15f);
         drainTargetRadiusFactor = Mathf.Clamp(drainTargetRadiusFactor, 0.15f, 0.95f);
         maxPreviewPaths = Mathf.Clamp(maxPreviewPaths, 1, 12);
+        rainbowSaturation = Mathf.Clamp01(rainbowSaturation);
+        rainbowValue = Mathf.Clamp01(rainbowValue);
+        rainbowAlpha = Mathf.Clamp01(rainbowAlpha);
+        rainbowScrollSpeed = Mathf.Clamp(rainbowScrollSpeed, 0f, 2f);
+        tracerRainbowSpread = Mathf.Clamp(tracerRainbowSpread, 0f, 3f);
+        runtimeUiScale = Mathf.Clamp(runtimeUiScale, 0.75f, 1.6f);
+        runtimeUiWidth = Mathf.Clamp(runtimeUiWidth, 280f, 680f);
+        runtimeUiHeight = Mathf.Clamp(runtimeUiHeight, 260f, 820f);
+        runtimeUiOpacity = Mathf.Clamp(runtimeUiOpacity, 0.15f, 1f);
     }
 }

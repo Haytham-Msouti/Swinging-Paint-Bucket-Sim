@@ -84,14 +84,14 @@ float Random01(uint seed)
 int3 PositionToCell(float3 position)
 {
     float3 minBounds = _BoundsCenter - _HalfBoundsSize.xxx;
-    int3 cell = (int3)floor((position - minBounds) * _InvCellSize);
+    int3 cell = (int3) floor((position - minBounds) * _InvCellSize);
     cell = clamp(cell, int3(0, 0, 0), int3(_GridResolution - 1, _GridResolution - 1, _GridResolution - 1));
     return cell;
 }
 
 uint CellHash(int3 cell)
 {
-    return (uint)(cell.x + cell.y * _GridResolution + cell.z * _GridResolution * _GridResolution);
+    return (uint) (cell.x + cell.y * _GridResolution + cell.z * _GridResolution * _GridResolution);
 }
 
 float SafeLength(float3 v)
@@ -110,57 +110,86 @@ float2 DiskSample(uint seedA, uint seedB, float radius)
 void EmitFromOutlet(uint3 id : SV_DispatchThreadID)
 {
     uint n = id.x;
-    if (n >= (uint)_EmitCount || _ParticleCount <= 0)
+    if (n >= (uint) _EmitCount || _ParticleCount <= 0)
     {
         return;
     }
 
-    uint idx = ((uint)_EmissionCursor + n) % (uint)_ParticleCount;
-    uint seed = WangHash(idx + (uint)(abs(_RandomSeed) * 1000.0) + n * 747796405u);
+    uint idx = ((uint) _EmissionCursor + n) % (uint) _ParticleCount;
+    uint seed = WangHash(idx + (uint) (abs(_RandomSeed) * 1000.0) + n * 747796405u);
 
+    float safeOutletRadius = max(_OutletRadius, 0.0001);
     float2 offset = float2(0.0, 0.0);
 
     if (_OutletShape == 1) // Line
     {
+        // A line outlet should still be coherent: long in one axis, thin in the other.
         float alongLine = (Random01(seed + 1u) - 0.5) * _LineOutletLength;
-        float smallWidth = (Random01(seed + 2u) - 0.5) * _OutletRadius * 0.35;
+        float smallWidth = (Random01(seed + 2u) - 0.5) * safeOutletRadius * 0.22;
         offset = float2(alongLine, smallWidth);
     }
     else if (_OutletShape == 2) // MultipleHoles
     {
+        // Each hole emits a small compact mini-stream instead of one noisy cloud.
         int holeCount = max(2, _MultipleHoleCount);
-        int holeIndex = (int)floor(Random01(seed + 1u) * holeCount);
+        int holeIndex = (int) floor(Random01(seed + 1u) * holeCount);
         holeIndex = clamp(holeIndex, 0, holeCount - 1);
         float centeredIndex = holeIndex - (holeCount - 1) * 0.5;
-        float2 disk = DiskSample(seed + 2u, seed + 3u, _OutletRadius * 0.30);
+        float2 disk = DiskSample(seed + 2u, seed + 3u, safeOutletRadius * 0.22);
         offset = float2(centeredIndex * _MultipleHoleSpacing + disk.x, disk.y);
     }
     else if (_OutletShape == 3) // Random
     {
-        float2 disk = DiskSample(seed + 1u, seed + 2u, _OutletRadius);
-        float2 jitter = DiskSample(seed + 3u, seed + 4u, _OutletRadius * _ShapeJitter);
-        offset = disk + jitter * lerp(0.25, 1.0, Random01(seed + 5u));
+        // Keep the random outlet readable, but reduce the violent breakup.
+        float2 disk = DiskSample(seed + 1u, seed + 2u, safeOutletRadius);
+        float2 jitter = DiskSample(seed + 3u, seed + 4u, safeOutletRadius * _ShapeJitter * 0.35);
+        offset = disk + jitter * lerp(0.10, 0.45, Random01(seed + 5u));
     }
     else // Circle
     {
-        offset = DiskSample(seed + 1u, seed + 2u, _OutletRadius);
+        // Compact circular outlet. This is the cleanest stream for painting.
+        offset = DiskSample(seed + 1u, seed + 2u, safeOutletRadius * 0.72);
     }
 
+    float edge01 = saturate(length(offset) / max(safeOutletRadius, 0.0001));
+
+    // Keep speed variation subtle: center is a little faster, edge is a little slower.
     float speedT = Random01(seed + 10u);
-    float speed = lerp(_OutletSpeedMin, _OutletSpeedMax, speedT);
+    float baseSpeed = lerp(_OutletSpeedMin, _OutletSpeedMax, speedT);
+    float coreSpeedFactor = lerp(1.08, 0.90, edge01);
+    float speedNoise = lerp(0.94, 1.06, Random01(seed + 16u));
+    float speed = baseSpeed * coreSpeedFactor * speedNoise;
 
-    float2 spreadDisk = DiskSample(seed + 11u, seed + 12u, _SpreadTan);
-    float3 spread = _OutletRight * spreadDisk.x + _OutletUp * spreadDisk.y;
+    // A realistic stream should be mostly coherent. Spread and jitter should be lateral,
+    // not full 3D noise inside the main velocity direction.
+    float spreadRadius = _SpreadTan * lerp(0.16, 0.46, edge01);
+    float2 spreadDisk = DiskSample(seed + 11u, seed + 12u, spreadRadius);
 
-    float3 randomJitter = float3(
-        Random01(seed + 13u) - 0.5,
-        Random01(seed + 14u) - 0.5,
-        Random01(seed + 15u) - 0.5
-    ) * _RandomVelocityJitter;
+    float jitterRadius = _RandomVelocityJitter * lerp(0.035, 0.13, edge01);
+    float2 jitterDisk = DiskSample(seed + 13u, seed + 14u, jitterRadius);
+
+    // Very small swirl makes the falling stream look alive without exploding sideways.
+    float swirlPhase = Random01(seed + 15u) * 6.28318530718 + _RandomSeed * 0.07;
+    float swirlAmount = _RandomVelocityJitter * 0.025 * (0.35 + 0.65 * edge01);
+    float2 swirl = float2(cos(swirlPhase), sin(swirlPhase)) * swirlAmount;
+
+    float3 lateral =
+        _OutletRight * (spreadDisk.x + jitterDisk.x + swirl.x) +
+        _OutletUp * (spreadDisk.y + jitterDisk.y + swirl.y);
+
+    float3 outletDir = normalize(_OutletDirection);
+    float3 worldDown = float3(0.0, -1.0, 0.0);
+
+    // Blend a little toward gravity at emission so the stream starts falling naturally,
+    // while the integration step continues the acceleration.
+    float gravityBlend = saturate(_Gravity / 9.81) * 0.10;
+    float3 coherentDir = normalize(lerp(outletDir, worldDown, gravityBlend));
+
+    float3 velocityDir = normalize(coherentDir + lateral);
 
     Particle p;
     p.position = _OutletPosition + _OutletRight * offset.x + _OutletUp * offset.y;
-    p.velocity = normalize(_OutletDirection + spread + randomJitter) * speed + _EmitterVelocity;
+    p.velocity = velocityDir * speed + _EmitterVelocity * 0.72;
     p.density = _RestDensity;
     p.pressure = 0.0;
     _Particles[idx] = p;
@@ -170,7 +199,7 @@ void EmitFromOutlet(uint3 id : SV_DispatchThreadID)
 void ClearGrid(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
-    if (i >= (uint)_CellsCount)
+    if (i >= (uint) _CellsCount)
     {
         return;
     }
@@ -181,21 +210,26 @@ void ClearGrid(uint3 id : SV_DispatchThreadID)
 void BuildGrid(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
-    if (i >= (uint)_ParticleCount)
+    if (i >= (uint) _ParticleCount)
     {
         return;
     }
 
     Particle p = _Particles[i];
+    if (p.density <= 0.0)
+    {
+        return;
+    }
+
     int3 cell = PositionToCell(p.position);
     uint hash = CellHash(cell);
 
     uint slot;
     InterlockedAdd(_CellCounts[hash], 1, slot);
 
-    if (slot < (uint)_MaxParticlesPerCell)
+    if (slot < (uint) _MaxParticlesPerCell)
     {
-        _CellParticles[hash * (uint)_MaxParticlesPerCell + slot] = i;
+        _CellParticles[hash * (uint) _MaxParticlesPerCell + slot] = i;
     }
 }
 
@@ -203,12 +237,17 @@ void BuildGrid(uint3 id : SV_DispatchThreadID)
 void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
-    if (i >= (uint)_ParticleCount)
+    if (i >= (uint) _ParticleCount)
     {
         return;
     }
 
     Particle pi = _Particles[i];
+    if (pi.density <= 0.0)
+    {
+        return;
+    }
+
     float h = max(_SmoothingRadius, 0.0001);
     float h2 = h * h;
     float h9 = h2 * h2 * h2 * h2 * h;
@@ -233,11 +272,11 @@ void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
                 }
 
                 uint hash = CellHash(cell);
-                uint count = min(_CellCounts[hash], (uint)_MaxParticlesPerCell);
+                uint count = min(_CellCounts[hash], (uint) _MaxParticlesPerCell);
 
                 for (uint n = 0; n < count; n++)
                 {
-                    uint j = _CellParticles[hash * (uint)_MaxParticlesPerCell + n];
+                    uint j = _CellParticles[hash * (uint) _MaxParticlesPerCell + n];
                     Particle pj = _Particles[j];
                     float3 rij = pi.position - pj.position;
                     float r2 = dot(rij, rij);
@@ -261,12 +300,17 @@ void ComputeDensityPressure(uint3 id : SV_DispatchThreadID)
 void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
-    if (i >= (uint)_ParticleCount)
+    if (i >= (uint) _ParticleCount)
     {
         return;
     }
 
     Particle pi = _Particles[i];
+    if (pi.density <= 0.0)
+    {
+        return;
+    }
+
     float h = max(_SmoothingRadius, 0.0001);
     float h2 = h * h;
     float h6 = h2 * h2 * h2;
@@ -276,6 +320,9 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
     float3 pressureForce = float3(0.0, 0.0, 0.0);
     float3 viscosityForce = float3(0.0, 0.0, 0.0);
     float3 cohesionForce = float3(0.0, 0.0, 0.0);
+    float3 xsphVelocityCorrection = float3(0.0, 0.0, 0.0);
+    float xsphWeightSum = 0.0;
+
     int3 baseCell = PositionToCell(pi.position);
 
     [unroll]
@@ -294,11 +341,11 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
                 }
 
                 uint hash = CellHash(cell);
-                uint count = min(_CellCounts[hash], (uint)_MaxParticlesPerCell);
+                uint count = min(_CellCounts[hash], (uint) _MaxParticlesPerCell);
 
                 for (uint n = 0; n < count; n++)
                 {
-                    uint j = _CellParticles[hash * (uint)_MaxParticlesPerCell + n];
+                    uint j = _CellParticles[hash * (uint) _MaxParticlesPerCell + n];
                     if (j == i)
                     {
                         continue;
@@ -313,6 +360,8 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
                         float3 dir = rij / r;
                         float neighborDensity = max(pj.density, 0.0001);
                         float hr = h - r;
+                        float q = saturate(hr / h);
+                        float smoothWeight = q * q * (3.0 - 2.0 * q);
 
                         float pressureMagnitude =
                             _ParticleMass *
@@ -322,11 +371,26 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
 
                         pressureForce += -dir * pressureMagnitude;
                         viscosityForce += _Viscosity * _ParticleMass * (pj.velocity - pi.velocity) / neighborDensity * viscLap * hr;
-                        cohesionForce += -dir * (_SurfaceTension * (hr / h) * (hr / h));
+
+                        // Gentle cohesive pull keeps the falling stream visually connected.
+                        // It stays mild, so pressure still prevents particles from collapsing.
+                        float cohesionStrength = _SurfaceTension + _Viscosity * 0.035;
+                        cohesionForce += -dir * (cohesionStrength * q * q);
+
+                        // XSPH-like velocity smoothing: nearby particles in the stream
+                        // move more together, reducing the "spray/noisy dust" look.
+                        xsphVelocityCorrection += (pj.velocity - pi.velocity) * smoothWeight;
+                        xsphWeightSum += smoothWeight;
                     }
                 }
             }
         }
+    }
+
+    if (xsphWeightSum > 0.0001)
+    {
+        float xsphStrength = saturate(_Viscosity * 3.5) * 0.035;
+        pi.velocity += (xsphVelocityCorrection / xsphWeightSum) * xsphStrength;
     }
 
     float3 force = pressureForce + viscosityForce + cohesionForce;
@@ -341,6 +405,10 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
     }
 
     pi.velocity += acceleration * _DeltaTime;
+
+    // Air resistance: slow side drift slightly more than downward motion.
+    float lateralDamp = saturate(_Drag * _DeltaTime * 1.7);
+    pi.velocity.xz *= (1.0 - lateralDamp);
 
     float velLen = SafeLength(pi.velocity);
     if (velLen > _MaxVelocity)
@@ -358,6 +426,18 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
         minBounds.y = max(minBounds.y, _GroundY);
     }
 
+    // If there is no ground collision, particles that fall below the simulation box are finished.
+    // This prevents old particles from bouncing and accumulating as a visible dotted pile.
+    if (_CollideWithGround != 1 && pi.position.y < minBounds.y)
+    {
+        pi.position = _BoundsCenter + float3(0.0, -_BoundsSize - 25.0, 0.0);
+        pi.velocity = float3(0.0, 0.0, 0.0);
+        pi.density = -1.0;
+        pi.pressure = 0.0;
+        _Particles[i] = pi;
+        return;
+    }
+
     if (pi.position.x < minBounds.x)
     {
         pi.position.x = minBounds.x;
@@ -373,7 +453,7 @@ void ComputeForcesIntegrate(uint3 id : SV_DispatchThreadID)
     {
         pi.position.y = minBounds.y;
         pi.velocity.y = abs(pi.velocity.y) * _BoundaryDamping;
-        pi.velocity.xz *= 0.985;
+        pi.velocity.xz *= 0.965;
     }
     else if (pi.position.y > maxBounds.y)
     {
